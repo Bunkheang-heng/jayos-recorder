@@ -12,7 +12,7 @@ function settingsPath(): string {
 }
 
 function defaultSaveDir(): string {
-  return app.getPath('videos')
+  return app.getPath('desktop')
 }
 
 async function readSettings(): Promise<Settings> {
