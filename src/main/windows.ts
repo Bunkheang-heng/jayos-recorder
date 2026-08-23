@@ -2,7 +2,12 @@ import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 
 const TOOLBAR_WIDTH = 420
-const TOOLBAR_HEIGHT = 64
+// The window must be tall enough to contain the pill AND the source-menu
+// dropdown / toast / countdown that render above it — a BrowserWindow clips
+// its content to its own bounds, so anything positioned outside this height
+// would be invisible even though it's "in the DOM".
+const TOOLBAR_WINDOW_HEIGHT = 500
+const TOOLBAR_BOTTOM_MARGIN = 24
 const DEFAULT_PIP_SIZE = { width: 240, height: 160 }
 
 function preloadPath(name: string): string {
@@ -18,6 +23,16 @@ function rendererUrlOrFile(name: string): { url?: string; file?: string } {
 }
 
 function loadRenderer(win: BrowserWindow, name: string): void {
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    console.log(`[${name} console][level ${level}] ${message} (${sourceId}:${line})`)
+  })
+  win.webContents.on('did-fail-load', (_event, code, description, url) => {
+    console.log(`[${name} did-fail-load] ${code} ${description} ${url}`)
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.log(`[${name} render-process-gone]`, details)
+  })
+
   const target = rendererUrlOrFile(name)
   if (target.url) {
     void win.loadURL(target.url)
@@ -29,11 +44,11 @@ function loadRenderer(win: BrowserWindow, name: string): void {
 export function createToolbarWindow(): BrowserWindow {
   const display = screen.getPrimaryDisplay()
   const x = Math.round(display.workArea.x + (display.workArea.width - TOOLBAR_WIDTH) / 2)
-  const y = display.workArea.y + display.workArea.height - TOOLBAR_HEIGHT - 24
+  const y = display.workArea.y + display.workArea.height - TOOLBAR_WINDOW_HEIGHT - TOOLBAR_BOTTOM_MARGIN
 
   const win = new BrowserWindow({
     width: TOOLBAR_WIDTH,
-    height: TOOLBAR_HEIGHT,
+    height: TOOLBAR_WINDOW_HEIGHT,
     x,
     y,
     frame: false,
