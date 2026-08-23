@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    />
+    <title>JAYOS Recorder</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="toolbar" class="toolbar">
+      <button id="source-btn" class="pill-btn" title="Choose what to record">
+        <span id="source-label">Full Screen</span>
+      </button>
+
+      <button id="mic-btn" class="icon-btn active" title="Toggle microphone">🎙️</button>
+      <button id="cam-btn" class="icon-btn active" title="Toggle webcam">📷</button>
+
+      <div id="timer" class="timer hidden">00:00</div>
+
+      <button id="record-btn" class="record-btn" title="Start recording">
+        <span class="dot"></span>
+      </button>
+      <button id="pause-btn" class="icon-btn hidden" title="Pause">⏸️</button>
+      <button id="stop-btn" class="icon-btn hidden" title="Stop">⏹️</button>
+
+      <div id="countdown" class="countdown hidden"></div>
+    </div>
+
+    <div id="source-menu" class="menu hidden"></div>
+    <div id="toast" class="toast hidden"></div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
