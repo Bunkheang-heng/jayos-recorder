@@ -12,7 +12,7 @@ function preloadPath(name: string): string {
 function rendererUrlOrFile(name: string): { url?: string; file?: string } {
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
   if (devServerUrl) {
-    return { url: `${devServerUrl}/src/renderer/${name}/index.html` }
+    return { url: `${devServerUrl}/${name}/index.html` }
   }
   return { file: path.join(__dirname, `../renderer/${name}/index.html`) }
 }
