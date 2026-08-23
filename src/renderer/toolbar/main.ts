@@ -1,11 +1,12 @@
 import type { RegionSelection, SourceInfo } from '../../shared/types'
 import { Recorder } from './recorder'
-import { ICON_PAUSE, ICON_PLAY, ICON_REGION } from './icons'
+import { ICON_MIC, ICON_MIC_OFF, ICON_PAUSE, ICON_PLAY, ICON_REGION } from './icons'
 
 const sourceBtn = document.getElementById('source-btn') as HTMLButtonElement
 const sourceLabel = document.getElementById('source-label') as HTMLSpanElement
 const sourceMenu = document.getElementById('source-menu') as HTMLDivElement
 const micBtn = document.getElementById('mic-btn') as HTMLButtonElement
+const micMenu = document.getElementById('mic-menu') as HTMLDivElement
 const camBtn = document.getElementById('cam-btn') as HTMLButtonElement
 const recordBtn = document.getElementById('record-btn') as HTMLButtonElement
 const pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement
@@ -17,6 +18,7 @@ const toastEl = document.getElementById('toast') as HTMLDivElement
 type Phase = 'idle' | 'recording' | 'paused'
 let phase: Phase = 'idle'
 let micEnabled = true
+let selectedMicId: string | null = null
 let webcamEnabled = true
 let selectedSource: SourceInfo | null = null
 let selectedRegion: RegionSelection | null = null
@@ -78,22 +80,95 @@ async function openSourceMenu(): Promise<void> {
 
 sourceBtn.addEventListener('click', () => {
   if (sourceMenu.classList.contains('hidden')) {
+    micMenu.classList.add('hidden')
     void openSourceMenu()
   } else {
     sourceMenu.classList.add('hidden')
   }
 })
 
-document.addEventListener('click', (event) => {
-  if (!sourceMenu.contains(event.target as Node) && event.target !== sourceBtn) {
+async function openMicMenu(): Promise<void> {
+  micMenu.innerHTML = ''
+  micMenu.classList.remove('hidden')
+
+  // Device labels are only populated once mic permission has been granted in
+  // this session — request it up front so the list below shows real names
+  // instead of blank/generic ones. Triggers the OS permission prompt if needed.
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
+    probe.getTracks().forEach((track) => track.stop())
+  } catch {
+    // No permission or no mic connected — device list will just be empty below.
+  }
+
+  const offItem = document.createElement('div')
+  offItem.className = micEnabled ? 'menu-item' : 'menu-item selected'
+  const offIcon = document.createElement('span')
+  offIcon.innerHTML = ICON_MIC_OFF
+  const offLabel = document.createElement('span')
+  offLabel.textContent = 'Microphone Off'
+  offItem.appendChild(offIcon)
+  offItem.appendChild(offLabel)
+  offItem.addEventListener('click', () => {
+    micEnabled = false
+    selectedMicId = null
+    micBtn.classList.remove('active')
+    micBtn.title = 'Microphone off'
+    recorder.setMicEnabled(false)
+    micMenu.classList.add('hidden')
+  })
+  micMenu.appendChild(offItem)
+
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  const mics = devices.filter((device) => device.kind === 'audioinput')
+
+  if (mics.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'menu-item'
+    empty.textContent = 'No microphone detected'
+    micMenu.appendChild(empty)
+    return
+  }
+
+  for (const mic of mics) {
+    const item = document.createElement('div')
+    item.className = micEnabled && mic.deviceId === selectedMicId ? 'menu-item selected' : 'menu-item'
+    const icon = document.createElement('span')
+    icon.innerHTML = ICON_MIC
+    const label = document.createElement('span')
+    label.textContent = mic.label || `Microphone (${mic.deviceId.slice(0, 6)})`
+    item.appendChild(icon)
+    item.appendChild(label)
+    item.addEventListener('click', () => {
+      micEnabled = true
+      selectedMicId = mic.deviceId
+      micBtn.classList.add('active')
+      micBtn.title = label.textContent as string
+      recorder.setMicEnabled(true)
+      recorder.setMicDeviceId(mic.deviceId)
+      micMenu.classList.add('hidden')
+    })
+    micMenu.appendChild(item)
+  }
+}
+
+micBtn.addEventListener('click', () => {
+  if (micMenu.classList.contains('hidden')) {
     sourceMenu.classList.add('hidden')
+    void openMicMenu()
+  } else {
+    micMenu.classList.add('hidden')
   }
 })
 
-micBtn.addEventListener('click', () => {
-  micEnabled = !micEnabled
-  micBtn.classList.toggle('active', micEnabled)
-  recorder.setMicEnabled(micEnabled)
+document.addEventListener('click', (event) => {
+  const target = event.target as Node
+  if (!sourceMenu.contains(target) && target !== sourceBtn) {
+    sourceMenu.classList.add('hidden')
+  }
+  if (!micMenu.contains(target) && target !== micBtn) {
+    micMenu.classList.add('hidden')
+  }
 })
 
 camBtn.addEventListener('click', async () => {

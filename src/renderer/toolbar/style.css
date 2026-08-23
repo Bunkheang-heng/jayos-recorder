@@ -149,6 +149,14 @@ button {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.menu-item.selected {
+  background: rgba(106, 140, 175, 0.25);
+}
+
+.menu-item.selected span:last-child {
+  color: #9fc0e0;
+}
+
 .menu-item img {
   width: 48px;
   height: 32px;

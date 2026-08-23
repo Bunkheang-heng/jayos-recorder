@@ -20,6 +20,7 @@ export class Recorder {
   private source: SourceInfo | null = null
   private region: RegionSelection | null = null
   private micEnabled = true
+  private micDeviceId: string | null = null
   private webcamEnabled = true
   private systemAudioSupported = false
   private pipBounds: NormalizedBounds = DEFAULT_PIP_BOUNDS
@@ -48,6 +49,10 @@ export class Recorder {
 
   setMicEnabled(enabled: boolean): void {
     this.micEnabled = enabled
+  }
+
+  setMicDeviceId(deviceId: string | null): void {
+    this.micDeviceId = deviceId
   }
 
   setWebcamEnabled(enabled: boolean): void {
@@ -84,7 +89,10 @@ export class Recorder {
     }
 
     if (this.micEnabled) {
-      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      const audio: MediaTrackConstraints | boolean = this.micDeviceId
+        ? { deviceId: { exact: this.micDeviceId } }
+        : true
+      this.micStream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
     }
 
     this.screenVideo = await attachToVideoElement(this.screenStream)
