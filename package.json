@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "package:mac": "electron-vite build && electron-builder --mac",
-    "package:win": "electron-vite build && electron-builder --win"
+    "package:win": "electron-vite build && electron-builder --win",
+    "install:mac": "electron-vite build && electron-builder --mac dir && rm -rf ~/Desktop/'JAYOS Recorder.app' && cp -R './dist/mac-arm64/JAYOS Recorder.app' ~/Desktop/"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
