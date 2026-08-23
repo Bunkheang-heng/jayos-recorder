@@ -123,10 +123,19 @@ export class Recorder {
 
   pause(): void {
     this.recorder?.pause()
+    // Stop compositing while paused — nothing is consuming these frames
+    // (MediaRecorder is paused too), so drawing them just burns CPU/battery.
+    if (this.rafHandle !== null) {
+      cancelAnimationFrame(this.rafHandle)
+      this.rafHandle = null
+    }
   }
 
   resume(): void {
     this.recorder?.resume()
+    if (this.rafHandle === null) {
+      this.runDrawLoop()
+    }
   }
 
   async stop(): Promise<string> {

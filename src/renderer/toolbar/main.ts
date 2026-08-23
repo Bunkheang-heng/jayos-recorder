@@ -1,5 +1,6 @@
 import type { RegionSelection, SourceInfo } from '../../shared/types'
 import { Recorder } from './recorder'
+import { ICON_PAUSE, ICON_PLAY, ICON_REGION } from './icons'
 
 const sourceBtn = document.getElementById('source-btn') as HTMLButtonElement
 const sourceLabel = document.getElementById('source-label') as HTMLSpanElement
@@ -44,7 +45,7 @@ async function openSourceMenu(): Promise<void> {
 
   const regionItem = document.createElement('div')
   regionItem.className = 'menu-item'
-  regionItem.innerHTML = '<span>▭</span><span>Custom Region…</span>'
+  regionItem.innerHTML = `<span>${ICON_REGION}</span><span>Custom Region…</span>`
   regionItem.addEventListener('click', async () => {
     sourceMenu.classList.add('hidden')
     const selection = await window.api.selectRegion()
@@ -194,12 +195,12 @@ pauseBtn.addEventListener('click', () => {
     recorder.pause()
     stopTimer()
     setPhase('paused')
-    pauseBtn.textContent = '▶️'
+    pauseBtn.innerHTML = ICON_PLAY
   } else if (phase === 'paused') {
     recorder.resume()
     startTimer()
     setPhase('recording')
-    pauseBtn.textContent = '⏸️'
+    pauseBtn.innerHTML = ICON_PAUSE
   }
 })
 
