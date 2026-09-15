@@ -1,13 +1,8 @@
 import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 
-const TOOLBAR_WIDTH = 420
-// The window must be tall enough to contain the pill AND the source-menu
-// dropdown / toast / countdown that render above it — a BrowserWindow clips
-// its content to its own bounds, so anything positioned outside this height
-// would be invisible even though it's "in the DOM".
-const TOOLBAR_WINDOW_HEIGHT = 500
-const TOOLBAR_BOTTOM_MARGIN = 24
+const STUDIO_WIDTH = 1180
+const STUDIO_HEIGHT = 760
 const DEFAULT_PIP_SIZE = { width: 240, height: 160 }
 
 function preloadPath(name: string): string {
@@ -43,18 +38,22 @@ function loadRenderer(win: BrowserWindow, name: string): void {
 
 export function createToolbarWindow(): BrowserWindow {
   const display = screen.getPrimaryDisplay()
-  const x = Math.round(display.workArea.x + (display.workArea.width - TOOLBAR_WIDTH) / 2)
-  const y = display.workArea.y + display.workArea.height - TOOLBAR_WINDOW_HEIGHT - TOOLBAR_BOTTOM_MARGIN
+  const x = Math.round(display.workArea.x + (display.workArea.width - STUDIO_WIDTH) / 2)
+  const y = Math.round(display.workArea.y + (display.workArea.height - STUDIO_HEIGHT) / 2)
 
   const win = new BrowserWindow({
-    width: TOOLBAR_WIDTH,
-    height: TOOLBAR_WINDOW_HEIGHT,
+    width: STUDIO_WIDTH,
+    height: STUDIO_HEIGHT,
+    minWidth: 900,
+    minHeight: 620,
     x,
     y,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    alwaysOnTop: true,
+    frame: true,
+    transparent: false,
+    resizable: true,
+    backgroundColor: '#1f1e1f',
+    title: 'JAYOS Recorder',
+    alwaysOnTop: false,
     skipTaskbar: false,
     webPreferences: {
       preload: preloadPath('toolbar'),
@@ -63,8 +62,10 @@ export function createToolbarWindow(): BrowserWindow {
     }
   })
 
-  win.setAlwaysOnTop(true, 'screen-saver')
   loadRenderer(win, 'toolbar')
+  // Keep the studio window out of its own screen capture — avoids mirror feedback
+  // and a big chunk of the compositing cost when previewing the full display.
+  win.setContentProtection(true)
   return win
 }
 

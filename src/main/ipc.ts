@@ -48,6 +48,8 @@ export function registerIpcHandlers(getToolbarWindow: () => BrowserWindow): void
     openPermissionSettings(kind)
   )
 
+  ipcMain.handle(IPC.getCursorPoint, async () => screen.getCursorScreenPoint())
+
   ipcMain.handle(IPC.selectRegion, async () => {
     if (regionSelectWindow) {
       regionSelectWindow.close()

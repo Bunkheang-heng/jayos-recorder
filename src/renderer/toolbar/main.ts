@@ -1,21 +1,45 @@
-import type { RegionSelection, SourceInfo } from '../../shared/types'
+import type { NormalizedBounds, RegionSelection, SourceInfo } from '../../shared/types'
+import { DEFAULT_QUALITY, isQualityId, type QualityId } from '../../shared/quality'
+import { DEFAULT_FORMAT, isOutputFormat, type OutputFormat } from '../../shared/format'
 import { Recorder } from './recorder'
-import { ICON_MIC, ICON_MIC_OFF, ICON_PAUSE, ICON_PLAY, ICON_REGION } from './icons'
+import { ICON_MIC, ICON_MIC_OFF } from './icons'
 
-const sourceBtn = document.getElementById('source-btn') as HTMLButtonElement
-const sourceLabel = document.getElementById('source-label') as HTMLSpanElement
-const sourceMenu = document.getElementById('source-menu') as HTMLDivElement
-const micBtn = document.getElementById('mic-btn') as HTMLButtonElement
-const micMenu = document.getElementById('mic-menu') as HTMLDivElement
+const previewMount = document.getElementById('preview-mount') as HTMLDivElement
+const previewPlaceholder = document.getElementById('preview-placeholder') as HTMLDivElement
+const previewStage = document.getElementById('preview-stage') as HTMLDivElement
+const webcamLayer = document.getElementById('webcam-layer') as HTMLDivElement
+const formatBadge = document.getElementById('format-badge') as HTMLDivElement
+const sourcesList = document.getElementById('sources-list') as HTMLDivElement
+const refreshSourcesBtn = document.getElementById('refresh-sources') as HTMLButtonElement
+const regionBtn = document.getElementById('region-btn') as HTMLButtonElement
 const camBtn = document.getElementById('cam-btn') as HTMLButtonElement
+const micBtn = document.getElementById('mic-btn') as HTMLButtonElement
+const micLabel = document.getElementById('mic-label') as HTMLDivElement
+const micMeter = document.getElementById('mic-meter') as HTMLDivElement
+const desktopAudioLabel = document.getElementById('desktop-audio-label') as HTMLDivElement
+const micMenu = document.getElementById('mic-menu') as HTMLDivElement
+const qualitySelect = document.getElementById('quality-select') as HTMLSelectElement
+const sceneStandardBtn = document.getElementById('scene-standard') as HTMLButtonElement
+const sceneTiktokBtn = document.getElementById('scene-tiktok') as HTMLButtonElement
 const recordBtn = document.getElementById('record-btn') as HTMLButtonElement
 const pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement
 const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement
-const timerEl = document.getElementById('timer') as HTMLDivElement
+const saveDirBtn = document.getElementById('save-dir-btn') as HTMLButtonElement
+const saveDirLabel = document.getElementById('save-dir-label') as HTMLDivElement
+const timerEl = document.getElementById('timer') as HTMLSpanElement
+const phaseLabel = document.getElementById('phase-label') as HTMLSpanElement
+const modeChip = document.getElementById('mode-chip') as HTMLSpanElement
+const recIndicator = document.getElementById('rec-indicator') as HTMLSpanElement
 const countdownEl = document.getElementById('countdown') as HTMLDivElement
 const toastEl = document.getElementById('toast') as HTMLDivElement
 
-type Phase = 'idle' | 'recording' | 'paused'
+type Phase = 'idle' | 'arming' | 'recording' | 'paused'
+type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
+
+const MIN_WEBCAM_SIZE = 0.08
+const QUALITY_STORAGE_KEY = 'jayos.quality'
+const FORMAT_STORAGE_KEY = 'jayos.format'
+
 let phase: Phase = 'idle'
 let micEnabled = true
 let selectedMicId: string | null = null
@@ -24,97 +48,317 @@ let selectedSource: SourceInfo | null = null
 let selectedRegion: RegionSelection | null = null
 let elapsedSeconds = 0
 let timerHandle: number | null = null
+let meterStream: MediaStream | null = null
+let meterContext: AudioContext | null = null
+let meterAnalyser: AnalyserNode | null = null
+let meterTimer: number | null = null
+let sources: SourceInfo[] = []
+let mountedCanvas: HTMLCanvasElement | null = null
 
 const recorder = new Recorder({
-  onError: (message) => showToast(message)
+  onError: (message) => showToast(message, true)
 })
 
-function showToast(message: string, duration = 4000): void {
+let webcamBounds: NormalizedBounds = recorder.getDefaultPipBoundsForFormat(DEFAULT_FORMAT)
+
+function showToast(message: string, isError = false, duration = 4000): void {
   toastEl.textContent = message
+  toastEl.classList.toggle('error', isError)
   toastEl.classList.remove('hidden')
   window.setTimeout(() => toastEl.classList.add('hidden'), duration)
 }
 
 function formatTime(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
-async function openSourceMenu(): Promise<void> {
-  sourceMenu.innerHTML = ''
-  sourceMenu.classList.remove('hidden')
+function shortPath(path: string): string {
+  if (path.length <= 42) return path
+  return `…${path.slice(-40)}`
+}
 
-  const regionItem = document.createElement('div')
-  regionItem.className = 'menu-item'
-  regionItem.innerHTML = `<span>${ICON_REGION}</span><span>Custom Region…</span>`
-  regionItem.addEventListener('click', async () => {
-    sourceMenu.classList.add('hidden')
-    const selection = await window.api.selectRegion()
-    if (!selection) return
-    selectedRegion = selection
-    selectedSource = { id: 'screen:0', name: 'Region', type: 'screen', thumbnailDataUrl: '' }
-    sourceLabel.textContent = 'Custom Region'
+function loadStoredQuality(): QualityId {
+  const stored = localStorage.getItem(QUALITY_STORAGE_KEY)
+  if (stored && isQualityId(stored)) return stored
+  return DEFAULT_QUALITY
+}
+
+function loadStoredFormat(): OutputFormat {
+  const stored = localStorage.getItem(FORMAT_STORAGE_KEY)
+  if (stored && isOutputFormat(stored)) return stored
+  return DEFAULT_FORMAT
+}
+
+function applyFormatUI(format: OutputFormat): void {
+  sceneStandardBtn.classList.toggle('selected', format === 'standard')
+  sceneTiktokBtn.classList.toggle('selected', format === 'tiktok')
+  formatBadge.classList.toggle('hidden', format !== 'tiktok')
+  previewMount.classList.toggle('tiktok-frame', format === 'tiktok')
+  modeChip.textContent = format === 'tiktok' ? 'TikTok 9:16' : 'Standard'
+  modeChip.classList.toggle('tiktok', format === 'tiktok')
+}
+
+function setOutputFormat(format: OutputFormat, resetWebcamPlacement = true): void {
+  recorder.setFormat(format)
+  localStorage.setItem(FORMAT_STORAGE_KEY, format)
+  applyFormatUI(format)
+
+  if (resetWebcamPlacement) {
+    webcamBounds = recorder.getDefaultPipBoundsForFormat(format)
+    applyWebcamLayerBounds()
+  }
+
+  syncPreviewStage()
+}
+
+function syncPipBounds(): void {
+  recorder.updatePipBounds(webcamBounds)
+}
+
+function applyWebcamLayerBounds(): void {
+  webcamLayer.style.left = `${webcamBounds.nx * 100}%`
+  webcamLayer.style.top = `${webcamBounds.ny * 100}%`
+  webcamLayer.style.width = `${webcamBounds.nw * 100}%`
+  webcamLayer.style.height = `${webcamBounds.nh * 100}%`
+  syncPipBounds()
+}
+
+function syncPreviewStage(): void {
+  const frame = previewMount.parentElement
+  if (!frame || !mountedCanvas) {
+    previewStage.style.left = '0'
+    previewStage.style.top = '0'
+    previewStage.style.width = '100%'
+    previewStage.style.height = '100%'
+    return
+  }
+
+  const frameRect = frame.getBoundingClientRect()
+  const canvasRect = mountedCanvas.getBoundingClientRect()
+  previewStage.style.left = `${canvasRect.left - frameRect.left}px`
+  previewStage.style.top = `${canvasRect.top - frameRect.top}px`
+  previewStage.style.width = `${canvasRect.width}px`
+  previewStage.style.height = `${canvasRect.height}px`
+}
+
+function mountCanvas(canvas: HTMLCanvasElement): void {
+  previewMount.replaceChildren(canvas)
+  mountedCanvas = canvas
+  previewPlaceholder.classList.add('hidden')
+  applyWebcamLayerBounds()
+  setWebcamVisible(webcamEnabled)
+  requestAnimationFrame(() => {
+    syncPreviewStage()
+    requestAnimationFrame(syncPreviewStage)
   })
-  sourceMenu.appendChild(regionItem)
+}
 
-  const sources = await window.api.listSources()
+function clearCanvasMount(): void {
+  previewMount.replaceChildren()
+  mountedCanvas = null
+  previewPlaceholder.classList.remove('hidden')
+  setWebcamVisible(false)
+}
+
+function setWebcamVisible(visible: boolean): void {
+  webcamLayer.classList.toggle('hidden', !visible)
+}
+
+async function startPreview(): Promise<void> {
+  if (!selectedSource || phase !== 'idle') return
+
+  recorder.setSource(selectedSource)
+  recorder.setRegion(selectedRegion)
+  recorder.setWebcamEnabled(webcamEnabled)
+  syncPipBounds()
+
+  try {
+    const canvas = await recorder.openPreview()
+    mountCanvas(canvas)
+  } catch (error) {
+    clearCanvasMount()
+    showToast(`Preview unavailable: ${(error as Error).message}`, true)
+  }
+}
+
+function renderSources(): void {
+  sourcesList.innerHTML = ''
+
+  if (webcamEnabled) {
+    sourcesList.appendChild(
+      createSourceRow({
+        title: 'Video Capture Device',
+        subtitle: 'Webcam',
+        selected: true,
+        thumbLabel: 'CAM'
+      })
+    )
+  }
+
+  if (selectedRegion) {
+    sourcesList.appendChild(
+      createSourceRow({
+        title: 'Custom Region',
+        subtitle: 'Cropped display',
+        selected: true,
+        thumbLabel: 'REG'
+      })
+    )
+  }
+
+  if (sources.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'source-empty'
+    empty.textContent = 'No capture sources found'
+    sourcesList.appendChild(empty)
+    return
+  }
+
   for (const source of sources) {
-    const item = document.createElement('div')
-    item.className = 'menu-item'
-    const img = document.createElement('img')
-    img.src = source.thumbnailDataUrl
-    const label = document.createElement('span')
-    label.textContent = source.name
-    item.appendChild(img)
-    item.appendChild(label)
+    const selected = selectedSource?.id === source.id && !selectedRegion
+    const item = createSourceRow({
+      title: source.name,
+      subtitle: source.type === 'screen' ? 'Display Capture' : 'Window Capture',
+      selected,
+      thumbUrl: source.thumbnailDataUrl
+    })
     item.addEventListener('click', () => {
+      if (phase !== 'idle') return
       selectedSource = source
       selectedRegion = null
-      sourceLabel.textContent = source.name
-      sourceMenu.classList.add('hidden')
+      regionBtn.classList.remove('active')
+      renderSources()
+      void startPreview()
     })
-    sourceMenu.appendChild(item)
+    sourcesList.appendChild(item)
   }
 }
 
-sourceBtn.addEventListener('click', () => {
-  if (sourceMenu.classList.contains('hidden')) {
-    micMenu.classList.add('hidden')
-    void openSourceMenu()
+function createSourceRow(options: {
+  title: string
+  subtitle: string
+  selected?: boolean
+  thumbUrl?: string
+  thumbLabel?: string
+}): HTMLButtonElement {
+  const item = document.createElement('button')
+  item.type = 'button'
+  item.className = options.selected ? 'source-item selected' : 'source-item'
+
+  if (options.thumbUrl) {
+    const img = document.createElement('img')
+    img.className = 'source-thumb'
+    img.src = options.thumbUrl
+    img.alt = ''
+    item.appendChild(img)
   } else {
-    sourceMenu.classList.add('hidden')
+    const thumb = document.createElement('div')
+    thumb.className = 'source-thumb placeholder'
+    thumb.textContent = options.thumbLabel ?? 'SRC'
+    item.appendChild(thumb)
   }
-})
+
+  const meta = document.createElement('div')
+  meta.className = 'source-meta'
+  const name = document.createElement('div')
+  name.className = 'source-name'
+  name.textContent = options.title
+  const type = document.createElement('div')
+  type.className = 'source-type'
+  type.textContent = options.subtitle
+  meta.appendChild(name)
+  meta.appendChild(type)
+  item.appendChild(meta)
+  return item
+}
+
+async function refreshSources(): Promise<void> {
+  sources = await window.api.listSources()
+  if (!selectedSource && !selectedRegion) {
+    const firstScreen = sources.find((source) => source.type === 'screen')
+    if (firstScreen) selectedSource = firstScreen
+  } else if (selectedSource && !selectedRegion) {
+    selectedSource = sources.find((source) => source.id === selectedSource?.id) ?? selectedSource
+  }
+  renderSources()
+  if (selectedSource && phase === 'idle') {
+    await startPreview()
+  }
+}
+
+async function stopMeter(): Promise<void> {
+  if (meterTimer !== null) {
+    window.clearInterval(meterTimer)
+    meterTimer = null
+  }
+  meterStream?.getTracks().forEach((track) => track.stop())
+  meterStream = null
+  meterAnalyser = null
+  micMeter.style.setProperty('--level', '0%')
+
+  // Never await AudioContext.close() — it can hang indefinitely in Chromium and
+  // block Start Recording before the countdown even begins.
+  if (meterContext) {
+    const ctx = meterContext
+    meterContext = null
+    void ctx.close().catch(() => undefined)
+  }
+}
+
+async function startMeter(): Promise<void> {
+  await stopMeter()
+  if (!micEnabled) return
+
+  try {
+    const audio: MediaTrackConstraints | boolean = selectedMicId
+      ? { deviceId: { exact: selectedMicId } }
+      : true
+    meterStream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
+    meterContext = new AudioContext()
+    const source = meterContext.createMediaStreamSource(meterStream)
+    meterAnalyser = meterContext.createAnalyser()
+    meterAnalyser.fftSize = 256
+    source.connect(meterAnalyser)
+
+    const data = new Uint8Array(meterAnalyser.frequencyBinCount)
+    meterTimer = window.setInterval(() => {
+      if (!meterAnalyser) return
+      meterAnalyser.getByteFrequencyData(data)
+      let sum = 0
+      for (const value of data) sum += value
+      const avg = sum / data.length / 255
+      const level = Math.min(100, Math.round(avg * 140))
+      micMeter.style.setProperty('--level', `${level}%`)
+    }, 100)
+  } catch {
+    micMeter.style.setProperty('--level', '0%')
+  }
+}
 
 async function openMicMenu(): Promise<void> {
   micMenu.innerHTML = ''
   micMenu.classList.remove('hidden')
 
-  // Device labels are only populated once mic permission has been granted in
-  // this session — request it up front so the list below shows real names
-  // instead of blank/generic ones. Triggers the OS permission prompt if needed.
   try {
     const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
     probe.getTracks().forEach((track) => track.stop())
   } catch {
-    // No permission or no mic connected — device list will just be empty below.
+    // Permission denied or no device — list may be empty.
   }
 
   const offItem = document.createElement('div')
   offItem.className = micEnabled ? 'menu-item' : 'menu-item selected'
-  const offIcon = document.createElement('span')
-  offIcon.innerHTML = ICON_MIC_OFF
-  const offLabel = document.createElement('span')
-  offLabel.textContent = 'Microphone Off'
-  offItem.appendChild(offIcon)
-  offItem.appendChild(offLabel)
+  offItem.innerHTML = `<span>${ICON_MIC_OFF}</span><span>Mute Mic/Aux</span>`
   offItem.addEventListener('click', () => {
     micEnabled = false
     selectedMicId = null
     micBtn.classList.remove('active')
-    micBtn.title = 'Microphone off'
+    micLabel.textContent = 'Mic/Aux (Muted)'
     recorder.setMicEnabled(false)
+    void stopMeter()
     micMenu.classList.add('hidden')
   })
   micMenu.appendChild(offItem)
@@ -131,22 +375,20 @@ async function openMicMenu(): Promise<void> {
   }
 
   for (const mic of mics) {
+    const label = mic.label || `Microphone (${mic.deviceId.slice(0, 6)})`
     const item = document.createElement('div')
     item.className = micEnabled && mic.deviceId === selectedMicId ? 'menu-item selected' : 'menu-item'
-    const icon = document.createElement('span')
-    icon.innerHTML = ICON_MIC
-    const label = document.createElement('span')
-    label.textContent = mic.label || `Microphone (${mic.deviceId.slice(0, 6)})`
-    item.appendChild(icon)
-    item.appendChild(label)
+    item.innerHTML = `<span>${ICON_MIC}</span><span></span>`
+    ;(item.lastElementChild as HTMLSpanElement).textContent = label
     item.addEventListener('click', () => {
       micEnabled = true
       selectedMicId = mic.deviceId
       micBtn.classList.add('active')
-      micBtn.title = label.textContent as string
+      micLabel.textContent = label
       recorder.setMicEnabled(true)
       recorder.setMicDeviceId(mic.deviceId)
       micMenu.classList.add('hidden')
+      void startMeter()
     })
     micMenu.appendChild(item)
   }
@@ -154,7 +396,6 @@ async function openMicMenu(): Promise<void> {
 
 micBtn.addEventListener('click', () => {
   if (micMenu.classList.contains('hidden')) {
-    sourceMenu.classList.add('hidden')
     void openMicMenu()
   } else {
     micMenu.classList.add('hidden')
@@ -163,10 +404,7 @@ micBtn.addEventListener('click', () => {
 
 document.addEventListener('click', (event) => {
   const target = event.target as Node
-  if (!sourceMenu.contains(target) && target !== sourceBtn) {
-    sourceMenu.classList.add('hidden')
-  }
-  if (!micMenu.contains(target) && target !== micBtn) {
+  if (!micMenu.contains(target) && target !== micBtn && !micBtn.contains(target)) {
     micMenu.classList.add('hidden')
   }
 })
@@ -174,13 +412,134 @@ document.addEventListener('click', (event) => {
 camBtn.addEventListener('click', async () => {
   webcamEnabled = !webcamEnabled
   camBtn.classList.toggle('active', webcamEnabled)
+  camBtn.textContent = 'Webcam'
   recorder.setWebcamEnabled(webcamEnabled)
-  if (webcamEnabled) {
-    await window.api.showPip()
-  } else {
-    await window.api.hidePip()
+  renderSources()
+  setWebcamVisible(webcamEnabled)
+  try {
+    await recorder.setWebcamLive(webcamEnabled)
+  } catch (error) {
+    showToast(`Webcam unavailable: ${(error as Error).message}`, true)
+    setWebcamVisible(false)
   }
 })
+
+qualitySelect.addEventListener('change', () => {
+  if (phase !== 'idle') {
+    qualitySelect.value = recorder.getQuality().id
+    return
+  }
+  const value = qualitySelect.value
+  if (!isQualityId(value)) return
+  recorder.setQuality(value)
+  localStorage.setItem(QUALITY_STORAGE_KEY, value)
+  syncPreviewStage()
+})
+
+sceneStandardBtn.addEventListener('click', () => {
+  if (phase !== 'idle') return
+  setOutputFormat('standard', true)
+})
+
+sceneTiktokBtn.addEventListener('click', () => {
+  if (phase !== 'idle') return
+  setOutputFormat('tiktok', true)
+})
+
+regionBtn.addEventListener('click', async () => {
+  if (phase !== 'idle') return
+  const selection = await window.api.selectRegion()
+  if (!selection) return
+  selectedRegion = selection
+  regionBtn.classList.add('active')
+
+  const screen = sources.find((source) => source.type === 'screen')
+  if (screen) {
+    selectedSource = { ...screen, name: 'Region' }
+  }
+  renderSources()
+  await startPreview()
+})
+
+refreshSourcesBtn.addEventListener('click', () => {
+  void refreshSources()
+})
+
+saveDirBtn.addEventListener('click', async () => {
+  const chosen = await window.api.chooseSaveDir()
+  if (chosen) {
+    saveDirLabel.textContent = `Save to: ${shortPath(chosen)}`
+  }
+})
+
+function setupWebcamInteraction(): void {
+  let dragMode: 'move' | ResizeHandle | null = null
+  let startX = 0
+  let startY = 0
+  let startBounds: NormalizedBounds = { ...webcamBounds }
+
+  const onPointerDown = (event: PointerEvent): void => {
+    if (!webcamEnabled) return
+    const target = event.target as HTMLElement
+    const handle = target.dataset.handle as ResizeHandle | undefined
+    dragMode = handle ?? 'move'
+    startX = event.clientX
+    startY = event.clientY
+    startBounds = { ...webcamBounds }
+    webcamLayer.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!dragMode) return
+    const stageRect = previewStage.getBoundingClientRect()
+    if (stageRect.width === 0 || stageRect.height === 0) return
+
+    const dx = (event.clientX - startX) / stageRect.width
+    const dy = (event.clientY - startY) / stageRect.height
+    let { nx, ny, nw, nh } = startBounds
+
+    if (dragMode === 'move') {
+      nx = Math.min(Math.max(0, startBounds.nx + dx), 1 - startBounds.nw)
+      ny = Math.min(Math.max(0, startBounds.ny + dy), 1 - startBounds.nh)
+    } else {
+      if (dragMode.includes('e')) {
+        nw = Math.min(Math.max(MIN_WEBCAM_SIZE, startBounds.nw + dx), 1 - startBounds.nx)
+      }
+      if (dragMode.includes('s')) {
+        nh = Math.min(Math.max(MIN_WEBCAM_SIZE, startBounds.nh + dy), 1 - startBounds.ny)
+      }
+      if (dragMode.includes('w')) {
+        const right = startBounds.nx + startBounds.nw
+        nx = Math.min(Math.max(0, startBounds.nx + dx), right - MIN_WEBCAM_SIZE)
+        nw = right - nx
+      }
+      if (dragMode.includes('n')) {
+        const bottom = startBounds.ny + startBounds.nh
+        ny = Math.min(Math.max(0, startBounds.ny + dy), bottom - MIN_WEBCAM_SIZE)
+        nh = bottom - ny
+      }
+    }
+
+    webcamBounds = { nx, ny, nw, nh }
+    applyWebcamLayerBounds()
+  }
+
+  const onPointerUp = (event: PointerEvent): void => {
+    if (!dragMode) return
+    dragMode = null
+    try {
+      webcamLayer.releasePointerCapture(event.pointerId)
+    } catch {
+      // Already released.
+    }
+  }
+
+  webcamLayer.addEventListener('pointerdown', onPointerDown)
+  webcamLayer.addEventListener('pointermove', onPointerMove)
+  webcamLayer.addEventListener('pointerup', onPointerUp)
+  webcamLayer.addEventListener('pointercancel', onPointerUp)
+}
 
 function runCountdown(): Promise<void> {
   return new Promise((resolve) => {
@@ -204,16 +563,47 @@ function runCountdown(): Promise<void> {
 
 function setPhase(next: Phase): void {
   phase = next
-  recordBtn.classList.toggle('hidden', phase !== 'idle')
-  pauseBtn.classList.toggle('hidden', phase === 'idle')
-  stopBtn.classList.toggle('hidden', phase === 'idle')
-  timerEl.classList.toggle('hidden', phase === 'idle')
-  sourceBtn.disabled = phase !== 'idle'
+  const idle = phase === 'idle'
+  const arming = phase === 'arming'
+  const live = phase === 'recording' || phase === 'paused'
+
+  recordBtn.classList.toggle('hidden', !idle && !arming)
+  recordBtn.disabled = !idle
+  pauseBtn.classList.toggle('hidden', !live)
+  stopBtn.classList.toggle('hidden', !live)
+  recIndicator.classList.toggle('hidden', !live)
+  recIndicator.classList.toggle('paused', phase === 'paused')
+  timerEl.classList.toggle('hidden', !live && !arming)
+  recordBtn.classList.toggle('recording', phase === 'recording' || arming)
+
+  refreshSourcesBtn.disabled = !idle
+  regionBtn.disabled = !idle
+  camBtn.disabled = !idle
+  qualitySelect.disabled = !idle
+  sceneStandardBtn.disabled = !idle
+  sceneTiktokBtn.disabled = !idle
+
+  if (phase === 'arming') {
+    recordBtn.textContent = 'Starting…'
+    phaseLabel.textContent = 'Starting'
+  } else if (phase === 'recording') {
+    pauseBtn.textContent = 'Pause'
+    recordBtn.textContent = 'Recording…'
+    phaseLabel.textContent = 'Recording'
+  } else if (phase === 'paused') {
+    pauseBtn.textContent = 'Resume'
+    phaseLabel.textContent = 'Paused'
+  } else {
+    recordBtn.textContent = 'Start Recording'
+    phaseLabel.textContent = 'Ready'
+    timerEl.textContent = '00:00:00'
+  }
 }
 
 function startTimer(): void {
   elapsedSeconds = 0
   timerEl.textContent = formatTime(0)
+  timerEl.classList.remove('hidden')
   timerHandle = window.setInterval(() => {
     elapsedSeconds += 1
     timerEl.textContent = formatTime(elapsedSeconds)
@@ -228,40 +618,57 @@ function stopTimer(): void {
 }
 
 recordBtn.addEventListener('click', async () => {
+  if (phase !== 'idle') return
   if (!selectedSource) {
-    showToast('Choose what to record first.')
+    showToast('Choose a source first.', true)
     return
   }
 
-  const permissions = await window.api.checkPermissions()
-  if (!permissions.screen) {
-    showToast('Screen Recording permission is required. Opening System Settings…')
-    await window.api.openPermissionSettings('screen')
-    return
-  }
-  if (webcamEnabled && !permissions.camera) {
-    showToast('Camera permission is required. Opening System Settings…')
-    await window.api.openPermissionSettings('camera')
-    return
-  }
-  if (micEnabled && !permissions.microphone) {
-    showToast('Microphone permission is required. Opening System Settings…')
-    await window.api.openPermissionSettings('microphone')
-    return
-  }
-
-  recorder.setSource(selectedSource)
-  recorder.setRegion(selectedRegion)
-
-  await runCountdown()
+  setPhase('arming')
 
   try {
-    await recorder.start()
+    const permissions = await window.api.checkPermissions()
+    if (!permissions.screen) {
+      showToast('Screen Recording permission is required. Opening System Settings…', true)
+      await window.api.openPermissionSettings('screen')
+      setPhase('idle')
+      return
+    }
+    if (webcamEnabled && !permissions.camera) {
+      showToast('Camera permission is required. Opening System Settings…', true)
+      await window.api.openPermissionSettings('camera')
+      setPhase('idle')
+      return
+    }
+    if (micEnabled && !permissions.microphone) {
+      showToast('Microphone permission is required. Opening System Settings…', true)
+      await window.api.openPermissionSettings('microphone')
+      setPhase('idle')
+      return
+    }
+
+    recorder.setSource(selectedSource)
+    recorder.setRegion(selectedRegion)
+    recorder.setMicEnabled(micEnabled)
+    recorder.setWebcamEnabled(webcamEnabled)
+    syncPipBounds()
+
+    await stopMeter()
+    await runCountdown()
+
+    if (!recorder.isPreviewOpen()) {
+      const canvas = await recorder.openPreview()
+      mountCanvas(canvas)
+    }
+    await recorder.startRecording()
+    syncPreviewStage()
     setPhase('recording')
-    recordBtn.classList.add('recording')
     startTimer()
   } catch (error) {
-    showToast(`Couldn't start recording: ${(error as Error).message}`)
+    showToast(`Couldn't start recording: ${(error as Error).message}`, true)
+    setPhase('idle')
+    await startPreview()
+    if (micEnabled) await startMeter()
   }
 })
 
@@ -270,46 +677,62 @@ pauseBtn.addEventListener('click', () => {
     recorder.pause()
     stopTimer()
     setPhase('paused')
-    pauseBtn.innerHTML = ICON_PLAY
   } else if (phase === 'paused') {
     recorder.resume()
     startTimer()
     setPhase('recording')
-    pauseBtn.innerHTML = ICON_PAUSE
   }
 })
 
 stopBtn.addEventListener('click', async () => {
   stopTimer()
-  recordBtn.classList.remove('recording')
   try {
-    const savedPath = await recorder.stop()
+    const savedPath = await recorder.stopRecording()
     showToast(`Saved to ${savedPath}`)
   } catch (error) {
-    showToast(`Failed to save recording: ${(error as Error).message}`)
+    showToast(`Failed to save recording: ${(error as Error).message}`, true)
   } finally {
     setPhase('idle')
+    if (!recorder.isPreviewOpen()) {
+      await startPreview()
+    } else {
+      syncPreviewStage()
+    }
+    if (micEnabled) await startMeter()
   }
 })
 
 async function init(): Promise<void> {
   const audioCapability = await window.api.getAudioCapability()
   recorder.setSystemAudioSupported(audioCapability.systemAudioSupported)
+  desktopAudioLabel.textContent = audioCapability.systemAudioSupported
+    ? 'Desktop Audio'
+    : 'Desktop Audio (Unavailable)'
+
   if (!audioCapability.systemAudioSupported) {
-    showToast('System audio capture isn’t supported on macOS — recordings will use microphone audio only.', 6000)
+    showToast('System audio isn’t available on macOS — mic audio only.', false, 5000)
   }
 
-  window.api.onPipBoundsChanged((bounds) => recorder.updatePipBounds(bounds))
+  await window.api.hidePip()
 
-  await window.api.showPip()
+  const quality = loadStoredQuality()
+  qualitySelect.value = quality
+  recorder.setQuality(quality)
 
-  const sources = await window.api.listSources()
-  const firstScreen = sources.find((s) => s.type === 'screen')
-  if (firstScreen) {
-    selectedSource = firstScreen
-    sourceLabel.textContent = firstScreen.name
-  }
+  const format = loadStoredFormat()
+  recorder.setFormat(format)
+  webcamBounds = recorder.getDefaultPipBoundsForFormat(format)
+  applyFormatUI(format)
 
+  applyWebcamLayerBounds()
+  setupWebcamInteraction()
+  window.addEventListener('resize', syncPreviewStage)
+
+  const saveDir = await window.api.getSaveDir()
+  saveDirLabel.textContent = `Save to: ${shortPath(saveDir)}`
+
+  await refreshSources()
+  await startMeter()
   setPhase('idle')
 }
 

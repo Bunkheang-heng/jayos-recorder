@@ -4,40 +4,132 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;"
     />
     <title>JAYOS Recorder</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div id="toolbar" class="toolbar">
-      <button id="source-btn" class="pill-btn" title="Choose what to record">
-        <span id="source-label">Full Screen</span>
-      </button>
+    <div class="studio">
+      <header class="titlebar">
+        <div class="titlebar-left">
+          <div class="titlebar-brand">JAYOS</div>
+          <span id="mode-chip" class="mode-chip">Standard</span>
+        </div>
+        <div class="titlebar-status">
+          <span id="rec-indicator" class="rec-indicator hidden"></span>
+          <span id="phase-label" class="phase-label">Ready</span>
+          <span id="timer" class="timer hidden">00:00:00</span>
+        </div>
+      </header>
 
-      <button id="mic-btn" class="icon-btn active" title="Choose microphone">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-      </button>
-      <button id="cam-btn" class="icon-btn active" title="Toggle webcam">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
-      </button>
+      <section class="preview-panel">
+        <div class="preview-frame">
+          <div id="preview-mount" class="preview-mount"></div>
+          <div id="preview-stage" class="preview-stage">
+            <div id="webcam-layer" class="webcam-layer hidden">
+              <div class="webcam-label">Webcam</div>
+              <span class="handle nw" data-handle="nw"></span>
+              <span class="handle ne" data-handle="ne"></span>
+              <span class="handle sw" data-handle="sw"></span>
+              <span class="handle se" data-handle="se"></span>
+            </div>
+          </div>
+          <div id="format-badge" class="format-badge hidden">9:16 · follows cursor</div>
+          <div id="preview-placeholder" class="preview-placeholder">
+            <span class="preview-title">No preview</span>
+            <span class="preview-hint">Pick a display or window in Sources</span>
+          </div>
+          <div id="countdown" class="countdown hidden"></div>
+        </div>
+      </section>
 
-      <div id="timer" class="timer hidden">00:00</div>
+      <section class="docks">
+        <div class="dock scenes-dock">
+          <div class="dock-header">Scenes</div>
+          <div class="dock-body stack">
+            <button id="scene-standard" class="row-item selected" type="button" data-format="standard">
+              <span class="row-dot"></span>
+              <span class="row-copy">
+                <span class="row-title">Standard</span>
+                <span class="row-sub">Full frame</span>
+              </span>
+            </button>
+            <button id="scene-tiktok" class="row-item" type="button" data-format="tiktok">
+              <span class="row-dot tiktok"></span>
+              <span class="row-copy">
+                <span class="row-title">TikTok</span>
+                <span class="row-sub">9:16 · cursor follow</span>
+              </span>
+            </button>
+          </div>
+        </div>
 
-      <button id="record-btn" class="record-btn" title="Start recording">
-        <span class="dot"></span>
-      </button>
-      <button id="pause-btn" class="icon-btn hidden" title="Pause">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-      </button>
-      <button id="stop-btn" class="icon-btn hidden" title="Stop">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-      </button>
+        <div class="dock sources-dock">
+          <div class="dock-header">
+            <span>Sources</span>
+            <button id="refresh-sources" class="dock-action" type="button" title="Refresh sources">↻</button>
+          </div>
+          <div id="sources-list" class="dock-body stack"></div>
+          <div class="dock-footer">
+            <button id="region-btn" class="tool-btn" type="button">Region</button>
+            <button id="cam-btn" class="tool-btn active" type="button">Webcam</button>
+          </div>
+        </div>
 
-      <div id="countdown" class="countdown hidden"></div>
+        <div class="dock audio-dock">
+          <div class="dock-header">Audio Mixer</div>
+          <div class="dock-body stack audio-body">
+            <div class="mixer-row">
+              <button id="mic-btn" class="mixer-mute active" type="button" title="Choose microphone">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              </button>
+              <div class="mixer-meta">
+                <div id="mic-label" class="mixer-label">Mic/Aux</div>
+                <div class="meter">
+                  <div id="mic-meter" class="meter-fill"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mixer-row dim">
+              <div class="mixer-mute locked" title="Desktop audio">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+              </div>
+              <div class="mixer-meta">
+                <div id="desktop-audio-label" class="mixer-label">Desktop Audio</div>
+                <div class="meter">
+                  <div class="meter-fill muted"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dock controls-dock">
+          <div class="dock-header">Controls</div>
+          <div class="dock-body controls-body">
+            <label class="field">
+              <span class="field-label">Quality</span>
+              <select id="quality-select" class="field-control">
+                <option value="performance">Performance</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+
+            <div class="controls-actions">
+              <button id="record-btn" class="action-btn record" type="button">Start Recording</button>
+              <button id="pause-btn" class="action-btn secondary hidden" type="button">Pause</button>
+              <button id="stop-btn" class="action-btn stop hidden" type="button">Stop</button>
+              <button id="save-dir-btn" class="action-btn secondary" type="button">Save Folder</button>
+            </div>
+
+            <div id="save-dir-label" class="save-dir-label"></div>
+          </div>
+        </div>
+      </section>
     </div>
 
-    <div id="source-menu" class="menu hidden"></div>
     <div id="mic-menu" class="menu hidden"></div>
     <div id="toast" class="toast hidden"></div>
 

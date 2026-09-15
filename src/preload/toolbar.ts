@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
 import type {
   AudioCapability,
+  CursorPoint,
   NormalizedBounds,
   PermissionKind,
   PermissionStatus,
@@ -31,7 +32,9 @@ const api = {
 
   checkPermissions: (): Promise<PermissionStatus> => ipcRenderer.invoke(IPC.checkPermissions),
   openPermissionSettings: (kind: PermissionKind): Promise<void> =>
-    ipcRenderer.invoke(IPC.openPermissionSettings, kind)
+    ipcRenderer.invoke(IPC.openPermissionSettings, kind),
+
+  getCursorPoint: (): Promise<CursorPoint> => ipcRenderer.invoke(IPC.getCursorPoint)
 }
 
 export type ToolbarApi = typeof api

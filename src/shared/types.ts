@@ -3,6 +3,8 @@ export interface SourceInfo {
   name: string
   type: 'screen' | 'window'
   thumbnailDataUrl: string
+  /** Present for screen sources — DIP bounds of that display. */
+  displayBounds?: Rectangle
 }
 
 export interface Rectangle {
@@ -49,6 +51,11 @@ export interface RecordingSource {
   cropRegion: Rectangle | null
 }
 
+export interface CursorPoint {
+  x: number
+  y: number
+}
+
 export const IPC = {
   listSources: 'sources:list',
   selectRegion: 'region:select',
@@ -62,5 +69,6 @@ export const IPC = {
   saveRecording: 'save:recording',
   getAudioCapability: 'audio:capability',
   checkPermissions: 'permissions:check',
-  openPermissionSettings: 'permissions:open-settings'
+  openPermissionSettings: 'permissions:open-settings',
+  getCursorPoint: 'cursor:point'
 } as const
