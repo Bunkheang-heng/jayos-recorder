@@ -19,8 +19,14 @@ describe('quality presets', () => {
     }
   })
 
-  it('sets balanced bitrate around 12 Mbps', () => {
-    expect(QUALITY_PRESETS.balanced.videoBitsPerSecond).toBe(12_000_000)
+  it('sets balanced bitrate around 10 Mbps', () => {
+    expect(QUALITY_PRESETS.balanced.videoBitsPerSecond).toBe(10_000_000)
+  })
+
+  it('keeps High at 1080p/30 instead of 5K/60', () => {
+    expect(QUALITY_PRESETS.high.recordMaxDimension).toBe(1920)
+    expect(QUALITY_PRESETS.high.recordFps).toBe(30)
+    expect(QUALITY_PRESETS.high.preferVp9).toBe(false)
   })
 
   it('validates quality ids', () => {

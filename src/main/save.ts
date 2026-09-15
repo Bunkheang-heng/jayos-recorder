@@ -1,11 +1,21 @@
 import { app, dialog } from 'electron'
+import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import ffmpegStatic from 'ffmpeg-static'
 import { timestampedFilename } from '../shared/filename'
+import { buildVideoEncoderAttempts } from '../shared/encode'
 
 interface Settings {
   saveDir: string
 }
+
+interface RecordingSession {
+  handle: fs.FileHandle
+  webmPath: string
+}
+
+const sessions = new Map<string, RecordingSession>()
 
 function settingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json')
@@ -49,10 +59,133 @@ export async function chooseSaveDir(): Promise<string | null> {
   return chosen
 }
 
-export async function saveRecording(buffer: Buffer, ext: string): Promise<string> {
+/** Opens a temp WebM on disk so chunks never pile up in renderer RAM. */
+export async function beginRecordingSession(): Promise<string> {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const webmPath = path.join(app.getPath('temp'), `jayos-${id}.webm`)
+  const handle = await fs.open(webmPath, 'w')
+  sessions.set(id, { handle, webmPath })
+  return id
+}
+
+export async function appendRecordingChunk(sessionId: string, buffer: Buffer): Promise<void> {
+  const session = sessions.get(sessionId)
+  if (!session) throw new Error('Recording session not found')
+  await session.handle.write(buffer)
+}
+
+export async function finishRecordingSession(sessionId: string): Promise<string> {
+  const session = sessions.get(sessionId)
+  if (!session) throw new Error('Recording session not found')
+
+  sessions.delete(sessionId)
+  await session.handle.close()
+
   const dir = await getSaveDir()
   await fs.mkdir(dir, { recursive: true })
-  const filePath = path.join(dir, timestampedFilename(new Date(), ext))
-  await fs.writeFile(filePath, buffer)
-  return filePath
+  const mp4Path = path.join(dir, timestampedFilename(new Date(), 'mp4'))
+
+  try {
+    await convertWebmToMp4(session.webmPath, mp4Path)
+    return mp4Path
+  } finally {
+    await fs.unlink(session.webmPath).catch(() => undefined)
+  }
+}
+
+export async function abortRecordingSession(sessionId: string): Promise<void> {
+  const session = sessions.get(sessionId)
+  if (!session) return
+  sessions.delete(sessionId)
+  await session.handle.close().catch(() => undefined)
+  await fs.unlink(session.webmPath).catch(() => undefined)
+}
+
+/**
+ * Legacy one-shot save (full buffer). Prefer streaming session APIs for recordings.
+ */
+export async function saveRecording(buffer: Buffer, sourceExt: string): Promise<string> {
+  const dir = await getSaveDir()
+  await fs.mkdir(dir, { recursive: true })
+  const mp4Path = path.join(dir, timestampedFilename(new Date(), 'mp4'))
+
+  if (sourceExt === 'mp4') {
+    await fs.writeFile(mp4Path, buffer)
+    return mp4Path
+  }
+
+  const tmpWebm = path.join(app.getPath('temp'), `jayos-${Date.now()}-${process.pid}.webm`)
+  try {
+    await fs.writeFile(tmpWebm, buffer)
+    await convertWebmToMp4(tmpWebm, mp4Path)
+    return mp4Path
+  } finally {
+    await fs.unlink(tmpWebm).catch(() => undefined)
+  }
+}
+
+function resolveFfmpegPath(): string {
+  if (!ffmpegStatic) {
+    throw new Error('Bundled ffmpeg is missing. Reinstall dependencies and try again.')
+  }
+
+  if (ffmpegStatic.includes('app.asar')) {
+    return ffmpegStatic.replace('app.asar', 'app.asar.unpacked')
+  }
+  return ffmpegStatic
+}
+
+async function convertWebmToMp4(inputPath: string, outputPath: string): Promise<void> {
+  const attempts = buildVideoEncoderAttempts()
+  let lastError: Error | null = null
+
+  for (const attempt of attempts) {
+    try {
+      await runFfmpeg([
+        '-y',
+        '-i',
+        inputPath,
+        ...attempt.videoArgs,
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        '-movflags',
+        '+faststart',
+        outputPath
+      ])
+      return
+    } catch (error) {
+      lastError = error as Error
+      await fs.unlink(outputPath).catch(() => undefined)
+    }
+  }
+
+  throw lastError ?? new Error('MP4 conversion failed on all encoders')
+}
+
+function runFfmpeg(args: string[]): Promise<void> {
+  const ffmpeg = resolveFfmpegPath()
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderr = ''
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+      if (stderr.length > 8000) stderr = stderr.slice(-8000)
+    })
+
+    child.on('error', (error) => {
+      reject(new Error(`Failed to start ffmpeg: ${error.message}`))
+    })
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`ffmpeg exit ${code}. ${stderr.trim()}`))
+    })
+  })
 }

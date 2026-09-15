@@ -5,7 +5,8 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/main/index.ts')
+        input: resolve(__dirname, 'src/main/index.ts'),
+        external: ['ffmpeg-static']
       }
     }
   },

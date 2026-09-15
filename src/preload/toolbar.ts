@@ -27,6 +27,13 @@ const api = {
   chooseSaveDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.chooseSaveDir),
   saveRecording: (buffer: ArrayBuffer, ext: string): Promise<string> =>
     ipcRenderer.invoke(IPC.saveRecording, buffer, ext),
+  beginRecordingSession: (): Promise<string> => ipcRenderer.invoke(IPC.beginRecordingSession),
+  appendRecordingChunk: (sessionId: string, buffer: ArrayBuffer): Promise<void> =>
+    ipcRenderer.invoke(IPC.appendRecordingChunk, sessionId, buffer),
+  finishRecordingSession: (sessionId: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.finishRecordingSession, sessionId),
+  abortRecordingSession: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.abortRecordingSession, sessionId),
 
   getAudioCapability: (): Promise<AudioCapability> => ipcRenderer.invoke(IPC.getAudioCapability),
 

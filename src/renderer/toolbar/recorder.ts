@@ -59,7 +59,8 @@ export class Recorder {
   private lastFrameAt = 0
   private recorder: MediaRecorder | null = null
   private canvasStream: MediaStream | null = null
-  private chunks: Blob[] = []
+  private sessionId: string | null = null
+  private chunkQueue: Promise<void> = Promise.resolve()
   private cropRect: CropRect | null = null
   private rawWidth = 0
   private rawHeight = 0
@@ -71,8 +72,13 @@ export class Recorder {
   private smoothCropY = 0
   private cropSmoothReady = false
   private cursorPollHandle: number | null = null
+  private drawSuspended = false
 
-  constructor(private callbacks: RecorderCallbacks) {}
+  constructor(private callbacks: RecorderCallbacks) {
+    document.addEventListener('visibilitychange', () => {
+      this.syncVisibilityCompositor()
+    })
+  }
 
   setSource(source: SourceInfo): void {
     this.source = source
@@ -191,6 +197,7 @@ export class Recorder {
     this.cropSmoothReady = false
     this.syncCursorFollow()
     this.runDrawLoop()
+    this.syncVisibilityCompositor()
     return this.canvas
   }
 
@@ -272,14 +279,31 @@ export class Recorder {
     ]
     const combined = new MediaStream([...this.canvasStream.getVideoTracks(), ...audioTracks])
 
-    this.chunks = []
+    this.sessionId = await window.api.beginRecordingSession()
+    this.chunkQueue = Promise.resolve()
     this.recorder = createMediaRecorder(combined, this.quality)
     this.recorder.ondataavailable = (event): void => {
-      if (event.data.size > 0) this.chunks.push(event.data)
+      if (event.data.size === 0 || !this.sessionId) return
+      const sessionId = this.sessionId
+      const blob = event.data
+      this.chunkQueue = this.chunkQueue
+        .then(async () => {
+          const buffer = await blob.arrayBuffer()
+          await window.api.appendRecordingChunk(sessionId, buffer)
+        })
+        .catch((error: unknown) => {
+          this.callbacks.onError(
+            `Failed to write recording chunk: ${(error as Error).message}`
+          )
+        })
     }
     this.recorder.onerror = (): void => this.callbacks.onError('Recording failed unexpectedly.')
     this.recorder.start(1000)
     this.recording = true
+    this.drawSuspended = false
+    if (this.rafHandle === null) {
+      this.runDrawLoop()
+    }
   }
 
   pause(): void {
@@ -292,6 +316,7 @@ export class Recorder {
 
   resume(): void {
     this.recorder?.resume()
+    this.drawSuspended = false
     if (this.rafHandle === null) {
       this.runDrawLoop()
     }
@@ -299,27 +324,33 @@ export class Recorder {
 
   async stopRecording(): Promise<string> {
     const recorder = this.recorder
-    if (!recorder) throw new Error('Not recording')
+    const sessionId = this.sessionId
+    if (!recorder || !sessionId) throw new Error('Not recording')
 
     const stopped = new Promise<void>((resolve) => {
       recorder.onstop = (): void => resolve()
     })
     recorder.stop()
     await stopped
+    await this.chunkQueue
 
     this.recording = false
     this.recorder = null
+    this.sessionId = null
     this.canvasStream?.getTracks().forEach((track) => track.stop())
     this.canvasStream = null
     this.micStream?.getTracks().forEach((track) => track.stop())
     this.micStream = null
 
     this.applyOutputSize('preview')
+    this.syncVisibilityCompositor()
 
-    const blob = new Blob(this.chunks, { type: 'video/webm' })
-    this.chunks = []
-    const buffer = await blob.arrayBuffer()
-    return window.api.saveRecording(buffer, 'webm')
+    try {
+      return await window.api.finishRecordingSession(sessionId)
+    } catch (error) {
+      await window.api.abortRecordingSession(sessionId).catch(() => undefined)
+      throw error
+    }
   }
 
   async start(): Promise<void> {
@@ -448,6 +479,7 @@ export class Recorder {
       this.cursorPollHandle = null
     }
     this.cropSmoothReady = false
+    this.drawSuspended = false
 
     if (this.rafHandle !== null) {
       cancelAnimationFrame(this.rafHandle)
@@ -462,6 +494,12 @@ export class Recorder {
       }
       this.recording = false
       this.recorder = null
+    }
+
+    if (this.sessionId) {
+      const id = this.sessionId
+      this.sessionId = null
+      await window.api.abortRecordingSession(id).catch(() => undefined)
     }
 
     this.canvasStream?.getTracks().forEach((track) => track.stop())
@@ -487,7 +525,13 @@ export class Recorder {
   }
 
   private runDrawLoop(): void {
+    if (this.drawSuspended) return
+
     const draw = (now: number): void => {
+      if (this.drawSuspended) {
+        this.rafHandle = null
+        return
+      }
       this.rafHandle = requestAnimationFrame(draw)
       const fps = this.recording ? this.quality.recordFps : this.quality.previewFps
       const interval = 1000 / fps
@@ -496,6 +540,30 @@ export class Recorder {
       this.paintFrame()
     }
     this.rafHandle = requestAnimationFrame(draw)
+  }
+
+  /** Pause preview compositing when the studio is hidden (keep going while recording). */
+  private syncVisibilityCompositor(): void {
+    const shouldSuspend = document.visibilityState === 'hidden' && !this.recording
+    if (shouldSuspend === this.drawSuspended) return
+
+    this.drawSuspended = shouldSuspend
+    if (shouldSuspend) {
+      if (this.rafHandle !== null) {
+        cancelAnimationFrame(this.rafHandle)
+        this.rafHandle = null
+      }
+      if (this.cursorPollHandle !== null) {
+        window.clearInterval(this.cursorPollHandle)
+        this.cursorPollHandle = null
+      }
+      return
+    }
+
+    if (this.previewOpen && this.rafHandle === null) {
+      this.runDrawLoop()
+    }
+    this.syncCursorFollow()
   }
 
   private paintFrame(): void {

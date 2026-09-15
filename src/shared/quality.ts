@@ -21,8 +21,8 @@ export const QUALITY_PRESETS: Record<QualityId, QualityPreset> = {
     label: 'Performance',
     previewMaxDimension: 960,
     recordMaxDimension: 1280,
-    recordFps: 30,
-    previewFps: 24,
+    recordFps: 24,
+    previewFps: 15,
     videoBitsPerSecond: 4_000_000,
     preferVp9: false
   },
@@ -32,19 +32,20 @@ export const QUALITY_PRESETS: Record<QualityId, QualityPreset> = {
     previewMaxDimension: 1280,
     recordMaxDimension: 1920,
     recordFps: 30,
-    previewFps: 30,
-    videoBitsPerSecond: 12_000_000,
+    previewFps: 20,
+    videoBitsPerSecond: 10_000_000,
     preferVp9: false
   },
   high: {
     id: 'high',
     label: 'High',
+    // Capped — previous 2560@60 VP9 melted CPUs; still looks sharp for screen+webcam.
     previewMaxDimension: 1280,
-    recordMaxDimension: 2560,
-    recordFps: 60,
-    previewFps: 30,
-    videoBitsPerSecond: 18_000_000,
-    preferVp9: true
+    recordMaxDimension: 1920,
+    recordFps: 30,
+    previewFps: 20,
+    videoBitsPerSecond: 14_000_000,
+    preferVp9: false
   }
 }
 

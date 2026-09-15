@@ -3,7 +3,7 @@ import { IPC } from '../shared/types'
 import type { PermissionKind, Rectangle, RegionSelection } from '../shared/types'
 import { computeNormalizedBounds } from '../shared/geometry'
 import { listSources } from './sources'
-import { chooseSaveDir, getSaveDir, saveRecording } from './save'
+import { chooseSaveDir, getSaveDir, saveRecording, beginRecordingSession, appendRecordingChunk, finishRecordingSession, abortRecordingSession } from './save'
 import { checkPermissions, openPermissionSettings } from './permissions'
 import { createPipWindow, createRegionSelectWindow } from './windows'
 
@@ -37,6 +37,16 @@ export function registerIpcHandlers(getToolbarWindow: () => BrowserWindow): void
 
   ipcMain.handle(IPC.saveRecording, async (_event, arrayBuffer: ArrayBuffer, ext: string) => {
     return saveRecording(Buffer.from(arrayBuffer), ext)
+  })
+  ipcMain.handle(IPC.beginRecordingSession, async () => beginRecordingSession())
+  ipcMain.handle(IPC.appendRecordingChunk, async (_event, sessionId: string, arrayBuffer: ArrayBuffer) => {
+    await appendRecordingChunk(sessionId, Buffer.from(arrayBuffer))
+  })
+  ipcMain.handle(IPC.finishRecordingSession, async (_event, sessionId: string) => {
+    return finishRecordingSession(sessionId)
+  })
+  ipcMain.handle(IPC.abortRecordingSession, async (_event, sessionId: string) => {
+    await abortRecordingSession(sessionId)
   })
 
   ipcMain.handle(IPC.getAudioCapability, async () => ({

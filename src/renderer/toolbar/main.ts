@@ -686,9 +686,10 @@ pauseBtn.addEventListener('click', () => {
 
 stopBtn.addEventListener('click', async () => {
   stopTimer()
+  phaseLabel.textContent = 'Saving MP4…'
   try {
     const savedPath = await recorder.stopRecording()
-    showToast(`Saved to ${savedPath}`)
+    showToast(`Saved MP4 to ${savedPath}`)
   } catch (error) {
     showToast(`Failed to save recording: ${(error as Error).message}`, true)
   } finally {
