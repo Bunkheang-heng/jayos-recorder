@@ -4,7 +4,6 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import ffmpegStatic from 'ffmpeg-static'
 import { timestampedFilename } from '../shared/filename'
-import { buildVideoEncoderAttempts } from '../shared/encode'
 
 interface Settings {
   saveDir: string
@@ -71,7 +70,7 @@ export async function beginRecordingSession(): Promise<string> {
 export async function appendRecordingChunk(sessionId: string, buffer: Buffer): Promise<void> {
   const session = sessions.get(sessionId)
   if (!session) throw new Error('Recording session not found')
-  await session.handle.write(buffer)
+  await session.handle.writeFile(buffer)
 }
 
 export async function finishRecordingSession(sessionId: string): Promise<string> {
@@ -82,15 +81,10 @@ export async function finishRecordingSession(sessionId: string): Promise<string>
   await session.handle.close()
 
   const dir = await getSaveDir()
-  await fs.mkdir(dir, { recursive: true })
-  const mp4Path = path.join(dir, timestampedFilename(new Date(), 'mp4'))
+  const webmPath = path.join(dir, timestampedFilename(new Date(), 'webm'))
 
-  try {
-    await convertWebmToMp4(session.webmPath, mp4Path)
-    return mp4Path
-  } finally {
-    await fs.unlink(session.webmPath).catch(() => undefined)
-  }
+  await exportRecording(session.webmPath, webmPath)
+  return webmPath
 }
 
 export async function abortRecordingSession(sessionId: string): Promise<void> {
@@ -105,23 +99,40 @@ export async function abortRecordingSession(sessionId: string): Promise<void> {
  * Legacy one-shot save (full buffer). Prefer streaming session APIs for recordings.
  */
 export async function saveRecording(buffer: Buffer, sourceExt: string): Promise<string> {
+  if (sourceExt !== 'webm' && sourceExt !== 'mp4') {
+    throw new Error('Unsupported recording format')
+  }
   const dir = await getSaveDir()
-  await fs.mkdir(dir, { recursive: true })
-  const mp4Path = path.join(dir, timestampedFilename(new Date(), 'mp4'))
+  const outputPath = path.join(dir, timestampedFilename(new Date(), sourceExt))
+  const tmpSource = path.join(app.getPath('temp'), `jayos-${Date.now()}-${process.pid}.${sourceExt}`)
+  await fs.writeFile(tmpSource, buffer)
+  await exportRecording(tmpSource, outputPath)
+  return outputPath
+}
 
-  if (sourceExt === 'mp4') {
-    await fs.writeFile(mp4Path, buffer)
-    return mp4Path
-  }
-
-  const tmpWebm = path.join(app.getPath('temp'), `jayos-${Date.now()}-${process.pid}.webm`)
+async function exportRecording(inputPath: string, outputPath: string): Promise<void> {
+  let stagingDir: string | undefined
   try {
-    await fs.writeFile(tmpWebm, buffer)
-    await convertWebmToMp4(tmpWebm, mp4Path)
-    return mp4Path
+    await fs.mkdir(path.dirname(outputPath), { recursive: true })
+    stagingDir = await fs.mkdtemp(path.join(path.dirname(outputPath), '.jayos-export-'))
+    const stagingPath = path.join(stagingDir, `recording${path.extname(outputPath)}`)
+    // Stream-copy adds duration and seek metadata without re-encoding audio/video.
+    await runFfmpeg([
+      '-y', '-i', inputPath, '-map', '0:v:0', '-map', '0:a?',
+      '-c', 'copy', stagingPath
+    ])
+    await runFfmpeg([
+      '-v', 'error', '-xerror', '-i', stagingPath,
+      '-map', '0:v:0', '-map', '0:a:0?',
+      '-frames:v', '1', '-frames:a', '1', '-f', 'null', '-'
+    ])
+    await fs.rename(stagingPath, outputPath)
+  } catch (error) {
+    throw new Error(`Export failed. Original recording kept at ${inputPath}. ${(error as Error).message}`)
   } finally {
-    await fs.unlink(tmpWebm).catch(() => undefined)
+    if (stagingDir) await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined)
   }
+  await fs.unlink(inputPath).catch(() => undefined)
 }
 
 function resolveFfmpegPath(): string {
@@ -133,35 +144,6 @@ function resolveFfmpegPath(): string {
     return ffmpegStatic.replace('app.asar', 'app.asar.unpacked')
   }
   return ffmpegStatic
-}
-
-async function convertWebmToMp4(inputPath: string, outputPath: string): Promise<void> {
-  const attempts = buildVideoEncoderAttempts()
-  let lastError: Error | null = null
-
-  for (const attempt of attempts) {
-    try {
-      await runFfmpeg([
-        '-y',
-        '-i',
-        inputPath,
-        ...attempt.videoArgs,
-        '-c:a',
-        'aac',
-        '-b:a',
-        '192k',
-        '-movflags',
-        '+faststart',
-        outputPath
-      ])
-      return
-    } catch (error) {
-      lastError = error as Error
-      await fs.unlink(outputPath).catch(() => undefined)
-    }
-  }
-
-  throw lastError ?? new Error('MP4 conversion failed on all encoders')
 }
 
 function runFfmpeg(args: string[]): Promise<void> {

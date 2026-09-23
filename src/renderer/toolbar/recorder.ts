@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_FORMAT,
   getTikTokOutputSize,
+  getRecordingBitrate,
   TIKTOK_ASPECT,
   type OutputFormat
 } from '../../shared/format'
@@ -24,6 +25,10 @@ interface DesktopCaptureConstraints {
     chromeMediaSource: 'desktop'
     chromeMediaSourceId?: string
     maxFrameRate?: number
+    minWidth?: number
+    minHeight?: number
+    maxWidth?: number
+    maxHeight?: number
   }
 }
 
@@ -148,6 +153,10 @@ export class Recorder {
     return this.previewOpen
   }
 
+  getMicrophoneStream(): MediaStream | null {
+    return this.micStream
+  }
+
   isRecording(): boolean {
     return this.recording
   }
@@ -162,7 +171,14 @@ export class Recorder {
       mandatory: {
         chromeMediaSource: 'desktop',
         chromeMediaSourceId: this.source.id,
-        maxFrameRate: this.quality.recordFps
+        maxFrameRate: this.quality.recordFps,
+        // Preserve display detail before cropping to portrait, especially on Retina.
+        ...(this.source.captureSize ? {
+          minWidth: this.source.captureSize.width,
+          maxWidth: this.source.captureSize.width,
+          minHeight: this.source.captureSize.height,
+          maxHeight: this.source.captureSize.height
+        } : { maxWidth: 3840, maxHeight: 2160 })
       }
     }
 
@@ -281,7 +297,7 @@ export class Recorder {
 
     this.sessionId = await window.api.beginRecordingSession()
     this.chunkQueue = Promise.resolve()
-    this.recorder = createMediaRecorder(combined, this.quality)
+    this.recorder = createMediaRecorder(combined, this.quality, this.format)
     this.recorder.ondataavailable = (event): void => {
       if (event.data.size === 0 || !this.sessionId) return
       const sessionId = this.sessionId
@@ -572,7 +588,8 @@ export class Recorder {
     const src = this.screenDrawRect()
     if (src.width <= 0 || src.height <= 0) return
 
-    this.ctx.imageSmoothingEnabled = false
+    this.ctx.imageSmoothingEnabled = true
+    this.ctx.imageSmoothingQuality = 'high'
     this.ctx.drawImage(
       this.screenVideo,
       src.x,
@@ -639,7 +656,7 @@ export function pickRecorderMimeType(preferVp9: boolean): string {
   return 'video/webm'
 }
 
-function createMediaRecorder(stream: MediaStream, quality: QualityPreset): MediaRecorder {
+function createMediaRecorder(stream: MediaStream, quality: QualityPreset, format: OutputFormat): MediaRecorder {
   const candidates = [
     quality.preferVp9 ? 'video/webm;codecs=vp9,opus' : '',
     'video/webm;codecs=vp8,opus',
@@ -651,18 +668,15 @@ function createMediaRecorder(stream: MediaStream, quality: QualityPreset): Media
     try {
       return new MediaRecorder(stream, {
         mimeType,
-        videoBitsPerSecond: quality.videoBitsPerSecond
+        videoBitsPerSecond: getRecordingBitrate(quality.id, format),
+        audioBitsPerSecond: 192_000
       })
     } catch (error) {
       lastError = error
     }
   }
 
-  try {
-    return new MediaRecorder(stream)
-  } catch (error) {
-    throw lastError ?? error
-  }
+  throw lastError ?? new Error('WebM recording is not supported on this device.')
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

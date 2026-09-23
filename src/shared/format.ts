@@ -1,4 +1,4 @@
-import type { QualityId } from './quality'
+import { getQualityPreset, type QualityId } from './quality'
 
 export type OutputFormat = 'standard' | 'tiktok'
 
@@ -20,6 +20,12 @@ export function getTikTokOutputSize(
   }
 
   if (qualityId === 'performance') return { width: 720, height: 1280 }
-  // Balanced + High both target native TikTok upload size; High still wins via fps/bitrate/codec.
+  // Balanced + High target 1080p portrait; High uses a larger recording bitrate.
   return { width: 1080, height: 1920 }
+}
+
+/** Portrait crops fill the frame with enlarged detail and need more bitrate. */
+export function getRecordingBitrate(qualityId: QualityId, format: OutputFormat): number {
+  if (format === 'standard') return getQualityPreset(qualityId).videoBitsPerSecond
+  return { performance: 8_000_000, balanced: 16_000_000, high: 24_000_000 }[qualityId]
 }

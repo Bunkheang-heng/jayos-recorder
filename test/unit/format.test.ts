@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getTikTokOutputSize, isOutputFormat, TIKTOK_ASPECT } from '../../src/shared/format'
+import { getTikTokOutputSize, getRecordingBitrate, isOutputFormat, TIKTOK_ASPECT } from '../../src/shared/format'
 
 describe('tiktok format', () => {
   it('uses a 9:16 aspect ratio', () => {
@@ -14,6 +14,12 @@ describe('tiktok format', () => {
     const preview = getTikTokOutputSize('balanced', 'preview')
     const record = getTikTokOutputSize('balanced', 'record')
     expect(preview.width * preview.height).toBeLessThan(record.width * record.height)
+  })
+
+  it('allocates more detail to portrait recording without changing standard mode', () => {
+    expect(getRecordingBitrate('balanced', 'standard')).toBe(10_000_000)
+    expect(getRecordingBitrate('balanced', 'tiktok')).toBeGreaterThan(getRecordingBitrate('balanced', 'standard'))
+    expect(getRecordingBitrate('high', 'tiktok')).toBeGreaterThan(getRecordingBitrate('balanced', 'tiktok'))
   })
 
   it('validates format ids', () => {

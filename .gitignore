@@ -4,3 +4,8 @@ node_modules/
 dist/
 out/
 release/
+signing.env
+*.p8
+*.pfx
+*.p12
+AuthKey_*.p8

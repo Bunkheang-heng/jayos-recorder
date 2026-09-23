@@ -5,6 +5,8 @@ export interface SourceInfo {
   thumbnailDataUrl: string
   /** Present for screen sources — DIP bounds of that display. */
   displayBounds?: Rectangle
+  /** Native display pixels, before the portrait crop. */
+  captureSize?: { width: number; height: number }
 }
 
 export interface Rectangle {

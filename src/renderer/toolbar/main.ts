@@ -2,6 +2,7 @@ import type { NormalizedBounds, RegionSelection, SourceInfo } from '../../shared
 import { DEFAULT_QUALITY, isQualityId, type QualityId } from '../../shared/quality'
 import { DEFAULT_FORMAT, isOutputFormat, type OutputFormat } from '../../shared/format'
 import { Recorder } from './recorder'
+import { AudioMeter } from './audio-meter'
 import { ICON_MIC, ICON_MIC_OFF } from './icons'
 
 const previewMount = document.getElementById('preview-mount') as HTMLDivElement
@@ -33,7 +34,7 @@ const recIndicator = document.getElementById('rec-indicator') as HTMLSpanElement
 const countdownEl = document.getElementById('countdown') as HTMLDivElement
 const toastEl = document.getElementById('toast') as HTMLDivElement
 
-type Phase = 'idle' | 'arming' | 'recording' | 'paused'
+type Phase = 'idle' | 'arming' | 'recording' | 'paused' | 'saving'
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
 
 const MIN_WEBCAM_SIZE = 0.08
@@ -48,11 +49,8 @@ let selectedSource: SourceInfo | null = null
 let selectedRegion: RegionSelection | null = null
 let elapsedSeconds = 0
 let timerHandle: number | null = null
-let meterStream: MediaStream | null = null
-let meterContext: AudioContext | null = null
-let meterAnalyser: AnalyserNode | null = null
-let meterTimer: number | null = null
 let sources: SourceInfo[] = []
+let screenPermissionPrompted = false
 let mountedCanvas: HTMLCanvasElement | null = null
 
 const recorder = new Recorder({
@@ -223,7 +221,7 @@ function renderSources(): void {
       title: source.name,
       subtitle: source.type === 'screen' ? 'Display Capture' : 'Window Capture',
       selected,
-      thumbUrl: source.thumbnailDataUrl
+      thumbUrl: source.thumbnailDataUrl || undefined
     })
     item.addEventListener('click', () => {
       if (phase !== 'idle') return
@@ -266,16 +264,31 @@ function createSourceRow(options: {
   const name = document.createElement('div')
   name.className = 'source-name'
   name.textContent = options.title
+  name.title = options.title
   const type = document.createElement('div')
   type.className = 'source-type'
   type.textContent = options.subtitle
   meta.appendChild(name)
   meta.appendChild(type)
+  item.title = options.title
   item.appendChild(meta)
   return item
 }
 
 async function refreshSources(): Promise<void> {
+  const permissions = await window.api.checkPermissions()
+  if (!permissions.screen) {
+    showToast(
+      'Screen Recording permission is required to list windows. Enable it for Electron / JAYOS, then hit Refresh.',
+      true,
+      7000
+    )
+    if (!screenPermissionPrompted) {
+      screenPermissionPrompted = true
+      await window.api.openPermissionSettings('screen')
+    }
+  }
+
   sources = await window.api.listSources()
   if (!selectedSource && !selectedRegion) {
     const firstScreen = sources.find((source) => source.type === 'screen')
@@ -289,56 +302,24 @@ async function refreshSources(): Promise<void> {
   }
 }
 
-async function stopMeter(): Promise<void> {
-  if (meterTimer !== null) {
-    window.clearInterval(meterTimer)
-    meterTimer = null
-  }
-  meterStream?.getTracks().forEach((track) => track.stop())
-  meterStream = null
-  meterAnalyser = null
-  micMeter.style.setProperty('--level', '0%')
+const audioMeter = new AudioMeter((level) => {
+  micMeter.style.setProperty('--level', `${level}%`)
+})
 
-  // Never await AudioContext.close() — it can hang indefinitely in Chromium and
-  // block Start Recording before the countdown even begins.
-  if (meterContext) {
-    const ctx = meterContext
-    meterContext = null
-    void ctx.close().catch(() => undefined)
-  }
+async function stopMeter(): Promise<void> {
+  audioMeter.stop()
 }
 
-async function startMeter(): Promise<void> {
-  await stopMeter()
-  if (!micEnabled) return
-
-  try {
-    const audio: MediaTrackConstraints | boolean = selectedMicId
-      ? { deviceId: { exact: selectedMicId } }
-      : true
-    meterStream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
-    meterContext = new AudioContext()
-    const source = meterContext.createMediaStreamSource(meterStream)
-    meterAnalyser = meterContext.createAnalyser()
-    meterAnalyser.fftSize = 256
-    source.connect(meterAnalyser)
-
-    const data = new Uint8Array(meterAnalyser.frequencyBinCount)
-    meterTimer = window.setInterval(() => {
-      if (!meterAnalyser) return
-      meterAnalyser.getByteFrequencyData(data)
-      let sum = 0
-      for (const value of data) sum += value
-      const avg = sum / data.length / 255
-      const level = Math.min(100, Math.round(avg * 140))
-      micMeter.style.setProperty('--level', `${level}%`)
-    }, 100)
-  } catch {
-    micMeter.style.setProperty('--level', '0%')
+async function startMeter(recordingStream?: MediaStream): Promise<void> {
+  if (!micEnabled) {
+    audioMeter.stop()
+    return
   }
+  await audioMeter.start(selectedMicId, recordingStream)
 }
 
 async function openMicMenu(): Promise<void> {
+  if (phase !== 'idle') return
   micMenu.innerHTML = ''
   micMenu.classList.remove('hidden')
 
@@ -353,6 +334,7 @@ async function openMicMenu(): Promise<void> {
   offItem.className = micEnabled ? 'menu-item' : 'menu-item selected'
   offItem.innerHTML = `<span>${ICON_MIC_OFF}</span><span>Mute Mic/Aux</span>`
   offItem.addEventListener('click', () => {
+    if (phase !== 'idle') return
     micEnabled = false
     selectedMicId = null
     micBtn.classList.remove('active')
@@ -381,6 +363,7 @@ async function openMicMenu(): Promise<void> {
     item.innerHTML = `<span>${ICON_MIC}</span><span></span>`
     ;(item.lastElementChild as HTMLSpanElement).textContent = label
     item.addEventListener('click', () => {
+      if (phase !== 'idle') return
       micEnabled = true
       selectedMicId = mic.deviceId
       micBtn.classList.add('active')
@@ -468,7 +451,7 @@ refreshSourcesBtn.addEventListener('click', () => {
 saveDirBtn.addEventListener('click', async () => {
   const chosen = await window.api.chooseSaveDir()
   if (chosen) {
-    saveDirLabel.textContent = `Save to: ${shortPath(chosen)}`
+    saveDirLabel.textContent = `WebM · Save to: ${shortPath(chosen)}`
   }
 })
 
@@ -579,9 +562,12 @@ function setPhase(next: Phase): void {
   refreshSourcesBtn.disabled = !idle
   regionBtn.disabled = !idle
   camBtn.disabled = !idle
+  micBtn.disabled = !idle
+  if (!idle) micMenu.classList.add('hidden')
   qualitySelect.disabled = !idle
   sceneStandardBtn.disabled = !idle
   sceneTiktokBtn.disabled = !idle
+  saveDirBtn.disabled = !idle
 
   if (phase === 'arming') {
     recordBtn.textContent = 'Starting…'
@@ -593,6 +579,8 @@ function setPhase(next: Phase): void {
   } else if (phase === 'paused') {
     pauseBtn.textContent = 'Resume'
     phaseLabel.textContent = 'Paused'
+  } else if (phase === 'saving') {
+    phaseLabel.textContent = 'Saving WebM…'
   } else {
     recordBtn.textContent = 'Start Recording'
     phaseLabel.textContent = 'Ready'
@@ -661,6 +649,8 @@ recordBtn.addEventListener('click', async () => {
       mountCanvas(canvas)
     }
     await recorder.startRecording()
+    const micStream = recorder.getMicrophoneStream()
+    if (micStream) await startMeter(micStream)
     syncPreviewStage()
     setPhase('recording')
     startTimer()
@@ -685,11 +675,13 @@ pauseBtn.addEventListener('click', () => {
 })
 
 stopBtn.addEventListener('click', async () => {
+  if (phase !== 'recording' && phase !== 'paused') return
+  setPhase('saving')
   stopTimer()
-  phaseLabel.textContent = 'Saving MP4…'
+  await stopMeter()
   try {
     const savedPath = await recorder.stopRecording()
-    showToast(`Saved MP4 to ${savedPath}`)
+    showToast(`Saved WebM to ${savedPath}`)
   } catch (error) {
     showToast(`Failed to save recording: ${(error as Error).message}`, true)
   } finally {
@@ -730,7 +722,7 @@ async function init(): Promise<void> {
   window.addEventListener('resize', syncPreviewStage)
 
   const saveDir = await window.api.getSaveDir()
-  saveDirLabel.textContent = `Save to: ${shortPath(saveDir)}`
+  saveDirLabel.textContent = `WebM · Save to: ${shortPath(saveDir)}`
 
   await refreshSources()
   await startMeter()

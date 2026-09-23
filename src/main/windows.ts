@@ -1,4 +1,5 @@
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, app, screen } from 'electron'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 const STUDIO_WIDTH = 1180
@@ -7,6 +8,15 @@ const DEFAULT_PIP_SIZE = { width: 240, height: 160 }
 
 function preloadPath(name: string): string {
   return path.join(__dirname, `../preload/${name}.js`)
+}
+
+function resolveAppIcon(): string | undefined {
+  const candidates = [
+    path.join(process.resourcesPath, 'icon.png'),
+    path.join(app.getAppPath(), 'build', 'icon.png'),
+    path.join(__dirname, '../../build/icon.png')
+  ]
+  return candidates.find((candidate) => existsSync(candidate))
 }
 
 function rendererUrlOrFile(name: string): { url?: string; file?: string } {
@@ -40,6 +50,7 @@ export function createToolbarWindow(): BrowserWindow {
   const display = screen.getPrimaryDisplay()
   const x = Math.round(display.workArea.x + (display.workArea.width - STUDIO_WIDTH) / 2)
   const y = Math.round(display.workArea.y + (display.workArea.height - STUDIO_HEIGHT) / 2)
+  const icon = resolveAppIcon()
 
   const win = new BrowserWindow({
     width: STUDIO_WIDTH,
@@ -53,6 +64,7 @@ export function createToolbarWindow(): BrowserWindow {
     resizable: true,
     backgroundColor: '#1f1e1f',
     title: 'JAYOS Recorder',
+    ...(icon ? { icon } : {}),
     alwaysOnTop: false,
     skipTaskbar: false,
     webPreferences: {

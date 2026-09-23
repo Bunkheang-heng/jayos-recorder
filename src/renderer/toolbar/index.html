@@ -13,7 +13,9 @@
     <div class="studio">
       <header class="titlebar">
         <div class="titlebar-left">
-          <div class="titlebar-brand">JAYOS</div>
+          <div class="titlebar-brand" aria-label="JAYOS">
+            <img class="titlebar-logo" src="./logo.png" alt="JAYOS" />
+          </div>
           <span id="mode-chip" class="mode-chip">Standard</span>
         </div>
         <div class="titlebar-status">
@@ -49,14 +51,12 @@
           <div class="dock-header">Scenes</div>
           <div class="dock-body stack">
             <button id="scene-standard" class="row-item selected" type="button" data-format="standard">
-              <span class="row-dot"></span>
               <span class="row-copy">
                 <span class="row-title">Standard</span>
                 <span class="row-sub">Full frame</span>
               </span>
             </button>
             <button id="scene-tiktok" class="row-item" type="button" data-format="tiktok">
-              <span class="row-dot tiktok"></span>
               <span class="row-copy">
                 <span class="row-title">TikTok</span>
                 <span class="row-sub">9:16 · cursor follow</span>

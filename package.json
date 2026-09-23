@@ -10,8 +10,13 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "check:signing": "node scripts/check-signing.mjs",
+    "check:signing:mac": "node scripts/check-signing.mjs mac",
+    "check:signing:win": "node scripts/check-signing.mjs win",
     "package:mac": "electron-vite build && electron-builder --mac",
+    "package:mac:signed": "node scripts/check-signing.mjs mac && electron-vite build && electron-builder --mac",
     "package:win": "electron-vite build && electron-builder --win",
+    "package:win:signed": "node scripts/check-signing.mjs win && electron-vite build && electron-builder --win",
     "package:linux": "electron-vite build && electron-builder --linux",
     "install:mac": "electron-vite build && electron-builder --mac dir && rm -rf ~/Desktop/'JAYOS Recorder.app' && cp -R './dist/mac-arm64/JAYOS Recorder.app' ~/Desktop/"
   },
@@ -27,22 +32,70 @@
   "build": {
     "appId": "com.jayos.recorder",
     "productName": "JAYOS Recorder",
+    "directories": {
+      "buildResources": "build"
+    },
     "files": [
       "out/**/*",
       "node_modules/ffmpeg-static/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
     ],
     "asarUnpack": [
       "**/node_modules/ffmpeg-static/**"
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true,
+      "extendInfo": {
+        "NSCameraUsageDescription": "JAYOS needs camera access for the webcam overlay.",
+        "NSMicrophoneUsageDescription": "JAYOS needs microphone access to record narration.",
+        "NSScreenCaptureUsageDescription": "JAYOS needs Screen Recording access to capture displays and windows."
+      }
+    },
+    "dmg": {
+      "sign": true
     },
     "win": {
-      "target": "nsis"
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Video"
     }
   },
