@@ -1,6 +1,9 @@
 import { app, BrowserWindow } from 'electron'
 import { createToolbarWindow } from './windows'
 import { registerIpcHandlers } from './ipc'
+import { registerPlaybackScheme, registerPlaybackProtocol } from './playback'
+
+registerPlaybackScheme()
 
 let toolbarWindow: BrowserWindow | null = null
 
@@ -14,6 +17,7 @@ function createMainWindows(): void {
 }
 
 app.whenReady().then(() => {
+  registerPlaybackProtocol()
   createMainWindows()
 
   app.on('activate', () => {

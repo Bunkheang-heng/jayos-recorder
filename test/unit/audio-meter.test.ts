@@ -2,19 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AudioMeter } from '../../src/renderer/toolbar/audio-meter'
 
 const stopTrack = vi.fn()
-const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream
+const track = { stop: stopTrack, readyState: 'live', muted: false, enabled: true }
+const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
 const getUserMedia = vi.fn()
 let amplitude = 0
 let meter: AudioMeter
 let onLevel: ReturnType<typeof vi.fn>
+let onStatus: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.useFakeTimers()
   amplitude = 0
+  track.readyState = 'live'
+  track.muted = false
+  track.enabled = true
   stopTrack.mockReset()
   getUserMedia.mockReset().mockResolvedValue(stream)
   vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
   vi.stubGlobal('AudioContext', class {
+    state = 'running'
     createMediaStreamSource = vi.fn(() => ({ connect: vi.fn() }))
     createAnalyser = vi.fn(() => ({
       fftSize: 1024,
@@ -24,7 +30,8 @@ beforeEach(() => {
     close = vi.fn().mockResolvedValue(undefined)
   })
   onLevel = vi.fn()
-  meter = new AudioMeter(onLevel)
+  onStatus = vi.fn()
+  meter = new AudioMeter(onLevel, onStatus)
 })
 afterEach(() => {
   meter.stop()
@@ -33,6 +40,28 @@ afterEach(() => {
 })
 
 describe('microphone meter', () => {
+  it('reports disconnects and muted input without stopping recording tracks', async () => {
+    await meter.start(null, stream)
+    track.muted = true
+    vi.advanceTimersByTime(50)
+    expect(onStatus).toHaveBeenLastCalledWith('muted')
+    track.muted = false
+    amplitude = 0.1
+    vi.advanceTimersByTime(50)
+    expect(onStatus).toHaveBeenLastCalledWith('ok')
+    track.readyState = 'ended'
+    vi.advanceTimersByTime(50)
+    expect(onStatus).toHaveBeenLastCalledWith('disconnected')
+    expect(onLevel).toHaveBeenLastCalledWith(0)
+    expect(stopTrack).not.toHaveBeenCalled()
+  })
+
+  it('reports an unavailable microphone when capture fails', async () => {
+    getUserMedia.mockRejectedValue(new Error('Device not found'))
+    await meter.start('missing')
+    expect(onStatus).toHaveBeenLastCalledWith('unavailable')
+  })
+
   it('responds to recorded audio and never stops the borrowed recording tracks', async () => {
     await meter.start(null, stream)
     expect(getUserMedia).not.toHaveBeenCalled()

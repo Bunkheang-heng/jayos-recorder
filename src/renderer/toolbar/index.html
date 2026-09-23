@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob: jayos-media:;"
     />
     <title>JAYOS Recorder</title>
     <link rel="stylesheet" href="./style.css" />
@@ -42,6 +42,7 @@
             <span class="preview-title">No preview</span>
             <span class="preview-hint">Pick a display or window in Sources</span>
           </div>
+          <div id="recording-warning" class="recording-warning hidden"></div>
           <div id="countdown" class="countdown hidden"></div>
         </div>
       </section>
@@ -89,6 +90,7 @@
                 <div class="meter">
                   <div id="mic-meter" class="meter-fill"></div>
                 </div>
+                <div id="mic-status" class="mic-status" role="status" aria-live="polite">Checking microphone…</div>
               </div>
             </div>
             <div class="mixer-row dim">
@@ -121,6 +123,10 @@
               <button id="record-btn" class="action-btn record" type="button">Start Recording</button>
               <button id="pause-btn" class="action-btn secondary hidden" type="button">Pause</button>
               <button id="stop-btn" class="action-btn stop hidden" type="button">Stop</button>
+              <div class="review-actions">
+                <button id="open-recording" class="action-btn secondary" type="button">Open Recording</button>
+                <button id="review-last" class="action-btn secondary" type="button" disabled>Review Last</button>
+              </div>
               <button id="save-dir-btn" class="action-btn secondary" type="button">Save Folder</button>
             </div>
 
@@ -129,6 +135,23 @@
         </div>
       </section>
     </div>
+
+    <dialog id="playback-dialog" class="playback-dialog" aria-labelledby="playback-title">
+      <div class="playback-header">
+        <div>
+          <h2 id="playback-title">Review recording</h2>
+          <p id="playback-name"></p>
+        </div>
+        <button id="playback-close" class="action-btn secondary" type="button" autofocus>Close</button>
+      </div>
+      <video id="playback-video" controls playsinline preload="metadata" aria-label="Recording playback"></video>
+      <p id="playback-error" class="playback-error hidden" role="alert"></p>
+      <div class="playback-footer">
+        <span id="playback-details">Loading recording…</span>
+        <button id="playback-reveal" class="action-btn secondary" type="button">Show in Folder</button>
+      </div>
+      <p id="playback-path" class="playback-path"></p>
+    </dialog>
 
     <div id="mic-menu" class="menu hidden"></div>
     <div id="toast" class="toast hidden"></div>

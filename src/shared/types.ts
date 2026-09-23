@@ -53,6 +53,13 @@ export interface RecordingSource {
   cropRegion: Rectangle | null
 }
 
+export interface PlaybackRecording {
+  id: string
+  name: string
+  filePath: string
+  url: string
+}
+
 export interface CursorPoint {
   x: number
   y: number
@@ -60,6 +67,9 @@ export interface CursorPoint {
 
 export const IPC = {
   listSources: 'sources:list',
+  chooseRecording: 'playback:choose',
+  getRecordingPlayback: 'playback:get',
+  revealRecording: 'playback:reveal',
   selectRegion: 'region:select',
   regionComplete: 'region:complete',
   showPip: 'pip:show',

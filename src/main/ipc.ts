@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, screen } from 'electron'
+import { chooseRecording, getRecordingPlayback, registerSavedRecording, revealRecording } from './playback'
 import { IPC } from '../shared/types'
 import type { PermissionKind, Rectangle, RegionSelection } from '../shared/types'
 import { computeNormalizedBounds } from '../shared/geometry'
@@ -7,6 +8,7 @@ import { chooseSaveDir, getSaveDir, saveRecording, beginRecordingSession, append
 import { checkPermissions, openPermissionSettings } from './permissions'
 import { createPipWindow, createRegionSelectWindow } from './windows'
 
+let handlersRegistered = false
 let toolbarWindow: BrowserWindow | null = null
 let pipWindow: BrowserWindow | null = null
 let regionSelectWindow: BrowserWindow | null = null
@@ -29,6 +31,12 @@ function attachPipBoundsReporting(win: BrowserWindow): void {
 
 export function registerIpcHandlers(getToolbarWindow: () => BrowserWindow): void {
   toolbarWindow = getToolbarWindow()
+  if (handlersRegistered) return
+  handlersRegistered = true
+
+  ipcMain.handle(IPC.chooseRecording, () => chooseRecording())
+  ipcMain.handle(IPC.getRecordingPlayback, (_event, filePath: string) => getRecordingPlayback(filePath))
+  ipcMain.handle(IPC.revealRecording, (_event, id: string) => revealRecording(id))
 
   ipcMain.handle(IPC.listSources, async () => listSources())
 
@@ -36,14 +44,18 @@ export function registerIpcHandlers(getToolbarWindow: () => BrowserWindow): void
   ipcMain.handle(IPC.chooseSaveDir, async () => chooseSaveDir())
 
   ipcMain.handle(IPC.saveRecording, async (_event, arrayBuffer: ArrayBuffer, ext: string) => {
-    return saveRecording(Buffer.from(arrayBuffer), ext)
+    const filePath = await saveRecording(Buffer.from(arrayBuffer), ext)
+    registerSavedRecording(filePath)
+    return filePath
   })
   ipcMain.handle(IPC.beginRecordingSession, async () => beginRecordingSession())
   ipcMain.handle(IPC.appendRecordingChunk, async (_event, sessionId: string, arrayBuffer: ArrayBuffer) => {
     await appendRecordingChunk(sessionId, Buffer.from(arrayBuffer))
   })
   ipcMain.handle(IPC.finishRecordingSession, async (_event, sessionId: string) => {
-    return finishRecordingSession(sessionId)
+    const filePath = await finishRecordingSession(sessionId)
+    registerSavedRecording(filePath)
+    return filePath
   })
   ipcMain.handle(IPC.abortRecordingSession, async (_event, sessionId: string) => {
     await abortRecordingSession(sessionId)

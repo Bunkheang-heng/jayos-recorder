@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
 import type {
   AudioCapability,
+  PlaybackRecording,
   CursorPoint,
   NormalizedBounds,
   PermissionKind,
@@ -11,6 +12,10 @@ import type {
 } from '../shared/types'
 
 const api = {
+  chooseRecording: (): Promise<PlaybackRecording | null> => ipcRenderer.invoke(IPC.chooseRecording),
+  getRecordingPlayback: (filePath: string): Promise<PlaybackRecording> =>
+    ipcRenderer.invoke(IPC.getRecordingPlayback, filePath),
+  revealRecording: (id: string): Promise<void> => ipcRenderer.invoke(IPC.revealRecording, id),
   listSources: (): Promise<SourceInfo[]> => ipcRenderer.invoke(IPC.listSources),
   selectRegion: (): Promise<RegionSelection | null> => ipcRenderer.invoke(IPC.selectRegion),
 

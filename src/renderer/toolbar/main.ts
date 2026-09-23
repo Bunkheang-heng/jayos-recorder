@@ -3,6 +3,8 @@ import { DEFAULT_QUALITY, isQualityId, type QualityId } from '../../shared/quali
 import { DEFAULT_FORMAT, isOutputFormat, type OutputFormat } from '../../shared/format'
 import { Recorder } from './recorder'
 import { AudioMeter } from './audio-meter'
+import { RecordingPlayback } from './playback'
+import type { MicStatus } from '../../shared/audio-health'
 import { ICON_MIC, ICON_MIC_OFF } from './icons'
 
 const previewMount = document.getElementById('preview-mount') as HTMLDivElement
@@ -33,6 +35,10 @@ const modeChip = document.getElementById('mode-chip') as HTMLSpanElement
 const recIndicator = document.getElementById('rec-indicator') as HTMLSpanElement
 const countdownEl = document.getElementById('countdown') as HTMLDivElement
 const toastEl = document.getElementById('toast') as HTMLDivElement
+const micStatusEl = document.getElementById('mic-status') as HTMLDivElement
+const recordingWarning = document.getElementById('recording-warning') as HTMLDivElement
+const openRecordingBtn = document.getElementById('open-recording') as HTMLButtonElement
+const reviewLastBtn = document.getElementById('review-last') as HTMLButtonElement
 
 type Phase = 'idle' | 'arming' | 'recording' | 'paused' | 'saving'
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
@@ -43,6 +49,7 @@ const FORMAT_STORAGE_KEY = 'jayos.format'
 
 let phase: Phase = 'idle'
 let micEnabled = true
+let micStatus: MicStatus = 'idle'
 let selectedMicId: string | null = null
 let webcamEnabled = true
 let selectedSource: SourceInfo | null = null
@@ -302,17 +309,68 @@ async function refreshSources(): Promise<void> {
   }
 }
 
+function updateMicStatus(): void {
+  const live = phase === 'recording' || phase === 'paused'
+  const warnings: Partial<Record<MicStatus, string>> = {
+    silent: 'No mic audio for 5 seconds — check your microphone.',
+    clipping: 'Mic too loud — lower the input gain.',
+    disconnected: 'Microphone disconnected — stop and reconnect it.',
+    muted: 'Microphone is not sending audio — check the device.',
+    unavailable: 'Cannot monitor microphone audio — check the input.'
+  }
+  const warning = micEnabled ? warnings[micStatus] : undefined
+  const showWarning = !!warning && (phase === 'recording' ||
+    micStatus === 'disconnected' || micStatus === 'unavailable' || micStatus === 'muted')
+  micStatusEl.textContent = !micEnabled ? 'Microphone off' :
+    phase === 'paused' && micStatus !== 'disconnected' ? 'Recording paused' :
+    showWarning ? warning! :
+    micStatus === 'ok' ? 'Microphone active' : 'Speak to check your microphone'
+  micStatusEl.classList.toggle('warning', showWarning)
+  recordingWarning.textContent = warning ?? ''
+  recordingWarning.classList.toggle('hidden', !live || !showWarning)
+}
+
 const audioMeter = new AudioMeter((level) => {
   micMeter.style.setProperty('--level', `${level}%`)
+}, (status) => {
+  micStatus = status
+  updateMicStatus()
+})
+
+const playback = new RecordingPlayback((open) => {
+  if (open) {
+    void stopMeter()
+  } else if (phase === 'idle' && micEnabled) {
+    void startMeter()
+  }
+  reviewLastBtn.disabled = phase !== 'idle' || !playback.hasRecording()
+})
+
+openRecordingBtn.addEventListener('click', async () => {
+  if (phase !== 'idle') return
+  openRecordingBtn.disabled = true
+  try {
+    const recording = await window.api.chooseRecording()
+    if (recording && phase === 'idle') playback.show(recording)
+  } catch (error) {
+    showToast(`Could not open recording: ${(error as Error).message}`, true)
+  } finally {
+    openRecordingBtn.disabled = phase !== 'idle'
+  }
+})
+reviewLastBtn.addEventListener('click', () => {
+  if (phase === 'idle') playback.reviewLast()
 })
 
 async function stopMeter(): Promise<void> {
   audioMeter.stop()
+  updateMicStatus()
 }
 
 async function startMeter(recordingStream?: MediaStream): Promise<void> {
   if (!micEnabled) {
     audioMeter.stop()
+    updateMicStatus()
     return
   }
   await audioMeter.start(selectedMicId, recordingStream)
@@ -568,6 +626,9 @@ function setPhase(next: Phase): void {
   sceneStandardBtn.disabled = !idle
   sceneTiktokBtn.disabled = !idle
   saveDirBtn.disabled = !idle
+  openRecordingBtn.disabled = !idle
+  reviewLastBtn.disabled = !idle || !playback.hasRecording()
+  updateMicStatus()
 
   if (phase === 'arming') {
     recordBtn.textContent = 'Starting…'
@@ -658,7 +719,7 @@ recordBtn.addEventListener('click', async () => {
     showToast(`Couldn't start recording: ${(error as Error).message}`, true)
     setPhase('idle')
     await startPreview()
-    if (micEnabled) await startMeter()
+    if (micEnabled && !playback.isOpen()) await startMeter()
   }
 })
 
@@ -682,6 +743,11 @@ stopBtn.addEventListener('click', async () => {
   try {
     const savedPath = await recorder.stopRecording()
     showToast(`Saved WebM to ${savedPath}`)
+    try {
+      playback.show(await window.api.getRecordingPlayback(savedPath))
+    } catch (error) {
+      showToast(`Recording saved, but review could not open: ${(error as Error).message}`, true)
+    }
   } catch (error) {
     showToast(`Failed to save recording: ${(error as Error).message}`, true)
   } finally {
@@ -691,7 +757,7 @@ stopBtn.addEventListener('click', async () => {
     } else {
       syncPreviewStage()
     }
-    if (micEnabled) await startMeter()
+    if (micEnabled && !playback.isOpen()) await startMeter()
   }
 })
 

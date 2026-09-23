@@ -343,11 +343,13 @@ export class Recorder {
     const sessionId = this.sessionId
     if (!recorder || !sessionId) throw new Error('Not recording')
 
-    const stopped = new Promise<void>((resolve) => {
-      recorder.onstop = (): void => resolve()
-    })
-    recorder.stop()
-    await stopped
+    if (recorder.state !== 'inactive') {
+      const stopped = new Promise<void>((resolve) => {
+        recorder.onstop = (): void => resolve()
+      })
+      recorder.stop()
+      await stopped
+    }
     await this.chunkQueue
 
     this.recording = false

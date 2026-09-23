@@ -1,3 +1,5 @@
+import { AudioHealth, type MicStatus } from '../../shared/audio-health'
+
 /** Observe a recording stream without owning (or stopping) its tracks. */
 export class AudioMeter {
   private stream: MediaStream | null = null
@@ -6,7 +8,18 @@ export class AudioMeter {
   private timer: ReturnType<typeof setInterval> | null = null
   private generation = 0
 
-  constructor(private onLevel: (percent: number) => void) {}
+  private status: MicStatus = 'idle'
+
+  constructor(
+    private onLevel: (percent: number) => void,
+    private onStatus: (status: MicStatus) => void = () => undefined
+  ) {}
+
+  private reportStatus(status: MicStatus): void {
+    if (status === this.status) return
+    this.status = status
+    this.onStatus(status)
+  }
 
   async start(deviceId: string | null, recordingStream?: MediaStream): Promise<void> {
     this.stop()
@@ -28,18 +41,45 @@ export class AudioMeter {
       const analyser = context.createAnalyser()
       analyser.fftSize = 1024
       source.connect(analyser)
-      void context.resume().catch(() => undefined)
+      void context.resume().catch(() => {
+        if (generation === this.generation) this.reportStatus('unavailable')
+      })
+      const health = new AudioHealth(performance.now())
       const samples = new Float32Array(analyser.fftSize)
       this.timer = setInterval(() => {
+        const tracks = stream.getAudioTracks()
+        if (tracks.length === 0 || tracks.every((track) => track.readyState === 'ended')) {
+          this.onLevel(0)
+          this.reportStatus('disconnected')
+          return
+        }
+        if (tracks.every((track) => track.muted || !track.enabled)) {
+          this.onLevel(0)
+          this.reportStatus('muted')
+          return
+        }
+        if (context.state !== 'running') {
+          this.onLevel(0)
+          this.reportStatus('unavailable')
+          return
+        }
         analyser.getFloatTimeDomainData(samples)
         let power = 0
-        for (const value of samples) power += value * value
+        let peak = 0
+        for (const value of samples) {
+          power += value * value
+          peak = Math.max(peak, Math.abs(value))
+        }
         const rms = Math.sqrt(power / samples.length)
         const db = 20 * Math.log10(Math.max(rms, 0.000001))
         this.onLevel(Math.max(0, Math.min(100, (db + 60) / 60 * 100)))
+        this.reportStatus(health.sample(db, peak, performance.now()))
       }, 50)
     } catch {
-      if (generation === this.generation) this.stop()
+      if (generation === this.generation) {
+        this.stop()
+        this.reportStatus('unavailable')
+      }
     }
   }
 
@@ -54,5 +94,6 @@ export class AudioMeter {
     if (this.context) void this.context.close().catch(() => undefined)
     this.context = null
     this.onLevel(0)
+    this.reportStatus('idle')
   }
 }
