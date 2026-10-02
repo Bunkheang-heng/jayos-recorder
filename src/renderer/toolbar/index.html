@@ -40,7 +40,7 @@
           <div id="format-badge" class="format-badge hidden">9:16 · follows cursor</div>
           <div id="preview-placeholder" class="preview-placeholder">
             <span class="preview-title">No preview</span>
-            <span class="preview-hint">Pick a display or window in Sources</span>
+            <span class="preview-hint">Choose Entire Screen or a window in Sources</span>
           </div>
           <div id="recording-warning" class="recording-warning hidden"></div>
           <div id="countdown" class="countdown hidden"></div>
@@ -73,6 +73,7 @@
           </div>
           <div id="sources-list" class="dock-body stack"></div>
           <div class="dock-footer">
+            <button id="entire-screen-btn" class="tool-btn" type="button" title="Share the full display without cropping">Entire Screen</button>
             <button id="region-btn" class="tool-btn" type="button">Region</button>
             <button id="cam-btn" class="tool-btn active" type="button">Webcam</button>
           </div>
@@ -119,6 +120,18 @@
               </select>
             </label>
 
+            <label class="field"><span class="field-label">Output</span>
+              <select id="output-mode" class="field-control"><option value="record">Recording</option><option value="stream">Live stream</option></select>
+            </label>
+            <div id="stream-settings" class="hidden">
+              <div id="stream-status" class="save-dir-label" role="status" aria-live="polite">Ready to stream</div>
+              <label class="field"><span class="field-label">Platform</span><select id="stream-platform" class="field-control"><option>YouTube</option><option>Facebook</option><option>Twitch</option><option>Custom RTMP</option></select></label>
+              <label class="field"><span class="field-label">Server URL</span><input id="stream-url" class="field-control" type="text" placeholder="rtmps://server/live" autocomplete="off" spellcheck="false" /></label>
+              <label class="field"><span class="field-label">Stream key</span><input id="stream-key" class="field-control" type="password" autocomplete="off" spellcheck="false" /></label>
+              <label class="field"><span><input id="record-local" type="checkbox" checked /> Save a local copy while streaming</span></label>
+              <p class="save-dir-label">Local copies use your Save Folder and continue during reconnects.</p>
+              <p class="save-dir-label">Copy the server URL and key from your platform’s live dashboard. Keys are not saved. Supports RTMP/RTMPS, one destination at a time.</p>
+            </div>
             <div class="controls-actions">
               <button id="record-btn" class="action-btn record" type="button">Start Recording</button>
               <button id="pause-btn" class="action-btn secondary hidden" type="button">Pause</button>

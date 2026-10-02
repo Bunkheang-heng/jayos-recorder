@@ -6,7 +6,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('captures native display detail before recording a 1080p portrait crop', async () => {
+it.each([false, true])('captures native display detail and preserves the local recording across reconnects (streaming=%s)', async (streaming) => {
   vi.useFakeTimers()
   const track = { stop: vi.fn() }
   const screenStream = { getTracks: () => [track], getVideoTracks: () => [track], getAudioTracks: () => [] }
@@ -15,6 +15,10 @@ it('captures native display detail before recording a 1080p portrait crop', asyn
   const canvas = { width: 0, height: 0, getContext: () => ctx, captureStream: () => screenStream }
   const getUserMedia = vi.fn().mockResolvedValueOnce(screenStream).mockResolvedValueOnce(micStream)
   const recorderOptions = vi.fn()
+  const mediaRecorders: { ondataavailable?: (event: { data: Blob }) => void; stop: () => void; state: string }[] = []
+  const beginLocal = vi.fn().mockResolvedValue('session')
+  const finishLocal = vi.fn().mockResolvedValue('recording.webm')
+  const appendLocal = vi.fn().mockResolvedValue(undefined)
   let draw!: FrameRequestCallback
   vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
   vi.stubGlobal('document', {
@@ -26,8 +30,12 @@ it('captures native display detail before recording a 1080p portrait crop', asyn
   vi.stubGlobal('window', {
     setInterval, clearInterval, setTimeout, clearTimeout,
     api: {
-      beginRecordingSession: vi.fn().mockResolvedValue('session'),
-      finishRecordingSession: vi.fn().mockResolvedValue('recording.webm'),
+      beginRecordingSession: beginLocal,
+      finishRecordingSession: finishLocal,
+      appendRecordingChunk: appendLocal,
+      beginStream: vi.fn().mockResolvedValue('stream-session'),
+      appendStream: vi.fn().mockResolvedValue(undefined),
+      finishStream: vi.fn().mockResolvedValue(undefined),
       getCursorPoint: vi.fn().mockResolvedValue({ x: 960, y: 540 })
     }
   })
@@ -37,9 +45,11 @@ it('captures native display detail before recording a 1080p portrait crop', asyn
   vi.stubGlobal('MediaRecorder', class {
     static isTypeSupported = () => true
     onstop?: () => void
-    constructor(_stream: unknown, options: unknown) { recorderOptions(options) }
-    start() {}
-    stop() { this.onstop?.() }
+    ondataavailable?: (event: { data: Blob }) => void
+    state = 'inactive'
+    constructor(_stream: unknown, options: unknown) { recorderOptions(options); mediaRecorders.push(this) }
+    start() { this.state = 'recording' }
+    stop() { this.state = 'inactive'; this.onstop?.() }
   })
   const recorder = new Recorder({ onError: vi.fn() })
   recorder.setSource({
@@ -49,7 +59,8 @@ it('captures native display detail before recording a 1080p portrait crop', asyn
   })
   recorder.setWebcamEnabled(false)
   recorder.setFormat('tiktok')
-  await recorder.startRecording()
+  const destination = { serverUrl: 'rtmp://example.com/live', streamKey: 'key' }
+  await recorder.startRecording(streaming ? destination : undefined, streaming)
   expect(getUserMedia.mock.calls[0][0].video.mandatory).toMatchObject({
     minWidth: 3840, maxWidth: 3840, minHeight: 2160, maxHeight: 2160
   })
@@ -60,7 +71,21 @@ it('captures native display detail before recording a 1080p portrait crop', asyn
   expect(ctx.imageSmoothingEnabled).toBe(true)
   expect(ctx.imageSmoothingQuality).toBe('high')
   expect(ctx.drawImage).toHaveBeenCalled()
-  await recorder.stopRecording()
+  if (streaming) {
+    const backup = mediaRecorders[0]
+    backup.ondataavailable?.({ data: new Blob(['before reconnect']) })
+    await recorder.restartStream(destination)
+    expect(backup.state).toBe('recording')
+    expect(beginLocal).toHaveBeenCalledTimes(1)
+    expect(finishLocal).not.toHaveBeenCalled()
+    expect(recorder.getMicrophoneStream()).toBe(micStream)
+    backup.ondataavailable?.({ data: new Blob(['after reconnect']) })
+  }
+  expect(await recorder.stopRecording()).toBe('recording.webm')
+  if (streaming) {
+    expect(appendLocal).toHaveBeenCalledTimes(2)
+    expect(finishLocal).toHaveBeenCalledTimes(1)
+  }
   expect(recorder.getMicrophoneStream()).toBeNull()
   await recorder.closePreview()
 })

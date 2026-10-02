@@ -1,3 +1,5 @@
+import { beginStream, appendStream, finishStream, abortStreams } from './stream'
+import type { StreamDestination } from '../shared/stream'
 import { ipcMain, BrowserWindow, screen } from 'electron'
 import { chooseRecording, getRecordingPlayback, registerSavedRecording, revealRecording } from './playback'
 import { IPC } from '../shared/types'
@@ -31,8 +33,26 @@ function attachPipBoundsReporting(win: BrowserWindow): void {
 
 export function registerIpcHandlers(getToolbarWindow: () => BrowserWindow): void {
   toolbarWindow = getToolbarWindow()
+  toolbarWindow.webContents.once('destroyed', abortStreams)
   if (handlersRegistered) return
   handlersRegistered = true
+
+  ipcMain.handle(IPC.beginStream, (event, destination: StreamDestination) => {
+    if (event.sender !== toolbarWindow?.webContents) throw new Error('Unauthorized streaming request')
+    return beginStream(destination, () => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC.streamFailed)
+    }, (status) => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC.streamStatus, status)
+    })
+  })
+  ipcMain.handle(IPC.appendStream, (event, id: string, buffer: ArrayBuffer) => {
+    if (event.sender !== toolbarWindow?.webContents) throw new Error('Unauthorized streaming request')
+    return appendStream(id, Buffer.from(buffer))
+  })
+  ipcMain.handle(IPC.finishStream, (event, id: string) => {
+    if (event.sender !== toolbarWindow?.webContents) throw new Error('Unauthorized streaming request')
+    return finishStream(id)
+  })
 
   ipcMain.handle(IPC.chooseRecording, () => chooseRecording())
   ipcMain.handle(IPC.getRecordingPlayback, (_event, filePath: string) => getRecordingPlayback(filePath))

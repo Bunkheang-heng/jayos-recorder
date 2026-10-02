@@ -1,3 +1,4 @@
+import { streamTarget } from '../../shared/stream'
 import type { NormalizedBounds, RegionSelection, SourceInfo } from '../../shared/types'
 import { DEFAULT_QUALITY, isQualityId, type QualityId } from '../../shared/quality'
 import { DEFAULT_FORMAT, isOutputFormat, type OutputFormat } from '../../shared/format'
@@ -24,6 +25,7 @@ const micMenu = document.getElementById('mic-menu') as HTMLDivElement
 const qualitySelect = document.getElementById('quality-select') as HTMLSelectElement
 const sceneStandardBtn = document.getElementById('scene-standard') as HTMLButtonElement
 const sceneTiktokBtn = document.getElementById('scene-tiktok') as HTMLButtonElement
+const entireScreenBtn = document.getElementById('entire-screen-btn') as HTMLButtonElement
 const recordBtn = document.getElementById('record-btn') as HTMLButtonElement
 const pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement
 const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement
@@ -39,6 +41,65 @@ const micStatusEl = document.getElementById('mic-status') as HTMLDivElement
 const recordingWarning = document.getElementById('recording-warning') as HTMLDivElement
 const openRecordingBtn = document.getElementById('open-recording') as HTMLButtonElement
 const reviewLastBtn = document.getElementById('review-last') as HTMLButtonElement
+
+const outputMode = document.getElementById('output-mode') as HTMLSelectElement
+const streamSettings = document.getElementById('stream-settings') as HTMLDivElement
+const streamPlatform = document.getElementById('stream-platform') as HTMLSelectElement
+const streamUrl = document.getElementById('stream-url') as HTMLInputElement
+const recordLocal = document.getElementById('record-local') as HTMLInputElement
+const streamKey = document.getElementById('stream-key') as HTMLInputElement
+const isStreaming = (): boolean => outputMode.value === 'stream'
+outputMode.addEventListener('change', () => {
+  streamSettings.classList.toggle('hidden', !isStreaming())
+  setPhase('idle')
+})
+const streamStatusEl = document.getElementById('stream-status') as HTMLDivElement
+let streamState = 'connecting'
+let retryCount = 0
+let retryGeneration = 0
+let retryWork: Promise<void> | null = null
+let pendingFailure = false
+window.api.onStreamStatus((status) => {
+  if (!isStreaming() || phase === 'idle' || phase === 'saving') return
+  streamState = status.state
+  streamStatusEl.textContent = status.state === 'live'
+    ? `Live · ${status.encoder === 'libx264' ? 'Software encoding' : 'Hardware encoding'}`
+    : status.state === 'connecting' ? 'Connecting…' : 'Disconnected'
+  if (status.state === 'live') retryCount = 0
+  if (phase === 'recording') phaseLabel.textContent = status.state === 'live' ? 'Live' : 'Connecting…'
+})
+window.api.onStreamFailed(() => {
+  pendingFailure = true
+  if (phase === 'recording') void reconnectStream()
+})
+
+async function reconnectStream(): Promise<void> {
+  if (retryWork || !isStreaming() || phase !== 'recording') return
+  const generation = retryGeneration
+  retryWork = (async () => {
+    while (pendingFailure && generation === retryGeneration && phase === 'recording') {
+      pendingFailure = false
+      if (++retryCount > 3) {
+        showToast('Stream disconnected after 3 retries. Check your URL, key, and connection.', true)
+        window.setTimeout(() => stopBtn.click(), 0)
+        return
+      }
+      streamStatusEl.textContent = `Reconnecting… attempt ${retryCount}/3`
+      phaseLabel.textContent = 'Reconnecting…'
+      await new Promise<void>(resolve => window.setTimeout(resolve, Math.min(1000 * 2 ** (retryCount - 1), 4000)))
+      if (generation !== retryGeneration || phase !== 'recording') return
+      try {
+        await recorder.restartStream({ serverUrl: streamUrl.value, streamKey: streamKey.value })
+        const mic = recorder.getMicrophoneStream()
+        if (mic) await startMeter(mic)
+      } catch {
+        pendingFailure = true
+      }
+    }
+  })()
+  try { await retryWork } finally { retryWork = null }
+}
+
 
 type Phase = 'idle' | 'arming' | 'recording' | 'paused' | 'saving'
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
@@ -61,7 +122,10 @@ let screenPermissionPrompted = false
 let mountedCanvas: HTMLCanvasElement | null = null
 
 const recorder = new Recorder({
-  onError: (message) => showToast(message, true)
+  onError: (message) => {
+    showToast(message, true)
+    if (isStreaming() && phase === 'recording') { pendingFailure = true; void reconnectStream() }
+  }
 })
 
 let webcamBounds: NormalizedBounds = recorder.getDefaultPipBoundsForFormat(DEFAULT_FORMAT)
@@ -104,6 +168,7 @@ function applyFormatUI(format: OutputFormat): void {
   previewMount.classList.toggle('tiktok-frame', format === 'tiktok')
   modeChip.textContent = format === 'tiktok' ? 'TikTok 9:16' : 'Standard'
   modeChip.classList.toggle('tiktok', format === 'tiktok')
+  syncEntireScreenButton()
 }
 
 function setOutputFormat(format: OutputFormat, resetWebcamPlacement = true): void {
@@ -189,7 +254,14 @@ async function startPreview(): Promise<void> {
   }
 }
 
+function syncEntireScreenButton(): void {
+  const active = selectedSource?.type === 'screen' && !selectedRegion && recorder.getFormat() === 'standard'
+  entireScreenBtn.classList.toggle('active', active)
+  entireScreenBtn.setAttribute('aria-pressed', String(active))
+}
+
 function renderSources(): void {
+  syncEntireScreenButton()
   sourcesList.innerHTML = ''
 
   if (webcamEnabled) {
@@ -226,7 +298,7 @@ function renderSources(): void {
     const selected = selectedSource?.id === source.id && !selectedRegion
     const item = createSourceRow({
       title: source.name,
-      subtitle: source.type === 'screen' ? 'Display Capture' : 'Window Capture',
+      subtitle: source.type === 'screen' ? 'Entire Screen' : 'Window',
       selected,
       thumbUrl: source.thumbnailDataUrl || undefined
     })
@@ -487,6 +559,22 @@ sceneTiktokBtn.addEventListener('click', () => {
   setOutputFormat('tiktok', true)
 })
 
+entireScreenBtn.addEventListener('click', async () => {
+  if (phase !== 'idle') return
+  const display = sources.find((source) => source.type === 'screen' && source.id === selectedSource?.id)
+    ?? sources.find((source) => source.type === 'screen')
+  if (!display) {
+    showToast('No displays available. Check screen recording permission and refresh Sources.', true)
+    return
+  }
+  selectedSource = display
+  selectedRegion = null
+  regionBtn.classList.remove('active')
+  setOutputFormat('standard')
+  renderSources()
+  await startPreview()
+})
+
 regionBtn.addEventListener('click', async () => {
   if (phase !== 'idle') return
   const selection = await window.api.selectRegion()
@@ -610,7 +698,7 @@ function setPhase(next: Phase): void {
 
   recordBtn.classList.toggle('hidden', !idle && !arming)
   recordBtn.disabled = !idle
-  pauseBtn.classList.toggle('hidden', !live)
+  pauseBtn.classList.toggle('hidden', !live || isStreaming())
   stopBtn.classList.toggle('hidden', !live)
   recIndicator.classList.toggle('hidden', !live)
   recIndicator.classList.toggle('paused', phase === 'paused')
@@ -618,10 +706,16 @@ function setPhase(next: Phase): void {
   recordBtn.classList.toggle('recording', phase === 'recording' || arming)
 
   refreshSourcesBtn.disabled = !idle
+  entireScreenBtn.disabled = !idle
   regionBtn.disabled = !idle
   camBtn.disabled = !idle
   micBtn.disabled = !idle
   if (!idle) micMenu.classList.add('hidden')
+  outputMode.disabled = !idle
+  streamUrl.disabled = !idle
+  streamKey.disabled = !idle
+  recordLocal.disabled = !idle
+  streamPlatform.disabled = !idle
   qualitySelect.disabled = !idle
   sceneStandardBtn.disabled = !idle
   sceneTiktokBtn.disabled = !idle
@@ -636,14 +730,14 @@ function setPhase(next: Phase): void {
   } else if (phase === 'recording') {
     pauseBtn.textContent = 'Pause'
     recordBtn.textContent = 'Recording…'
-    phaseLabel.textContent = 'Recording'
+    phaseLabel.textContent = isStreaming() ? (streamState === 'live' ? 'Live' : 'Connecting…') : 'Recording'
   } else if (phase === 'paused') {
     pauseBtn.textContent = 'Resume'
     phaseLabel.textContent = 'Paused'
   } else if (phase === 'saving') {
-    phaseLabel.textContent = 'Saving WebM…'
+    phaseLabel.textContent = isStreaming() ? 'Ending stream…' : 'Saving WebM…'
   } else {
-    recordBtn.textContent = 'Start Recording'
+    recordBtn.textContent = isStreaming() ? 'Go Live' : 'Start Recording'
     phaseLabel.textContent = 'Ready'
     timerEl.textContent = '00:00:00'
   }
@@ -673,6 +767,18 @@ recordBtn.addEventListener('click', async () => {
     return
   }
 
+  const destination = isStreaming() ? { serverUrl: streamUrl.value, streamKey: streamKey.value } : undefined
+  if (destination) {
+    try { streamTarget(destination) } catch (error) {
+      showToast((error as Error).message, true)
+      return
+    }
+  }
+  retryGeneration += 1
+  retryCount = 0
+  pendingFailure = false
+  streamState = 'connecting'
+  streamStatusEl.textContent = 'Connecting…'
   setPhase('arming')
 
   try {
@@ -709,14 +815,15 @@ recordBtn.addEventListener('click', async () => {
       const canvas = await recorder.openPreview()
       mountCanvas(canvas)
     }
-    await recorder.startRecording()
+    await recorder.startRecording(destination, !!destination && recordLocal.checked)
     const micStream = recorder.getMicrophoneStream()
     if (micStream) await startMeter(micStream)
     syncPreviewStage()
     setPhase('recording')
+    if (pendingFailure && isStreaming()) void reconnectStream()
     startTimer()
   } catch (error) {
-    showToast(`Couldn't start recording: ${(error as Error).message}`, true)
+    showToast(`Couldn't start ${isStreaming() ? 'stream' : 'recording'}: ${(error as Error).message}`, true)
     setPhase('idle')
     await startPreview()
     if (micEnabled && !playback.isOpen()) await startMeter()
@@ -737,19 +844,26 @@ pauseBtn.addEventListener('click', () => {
 
 stopBtn.addEventListener('click', async () => {
   if (phase !== 'recording' && phase !== 'paused') return
+  retryGeneration += 1
   setPhase('saving')
   stopTimer()
   await stopMeter()
   try {
-    const savedPath = await recorder.stopRecording()
-    showToast(`Saved WebM to ${savedPath}`)
+    await retryWork
+    const savedPath = recorder.isRecording() ? await recorder.stopRecording() : ''
+    if (isStreaming()) {
+      streamStatusEl.textContent = 'Stream ended'
+      if (!savedPath) { showToast('Live stream ended.'); return }
+      showToast(`Live stream ended. Local copy saved to ${savedPath}`)
+    }
+    if (!isStreaming()) showToast(`Saved WebM to ${savedPath}`)
     try {
       playback.show(await window.api.getRecordingPlayback(savedPath))
     } catch (error) {
       showToast(`Recording saved, but review could not open: ${(error as Error).message}`, true)
     }
   } catch (error) {
-    showToast(`Failed to save recording: ${(error as Error).message}`, true)
+    showToast(`Could not finish ${isStreaming() ? 'stream' : 'recording'}: ${(error as Error).message}`, true)
   } finally {
     setPhase('idle')
     if (!recorder.isPreviewOpen()) {

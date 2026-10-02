@@ -1,3 +1,4 @@
+import type { StreamDestination } from '../../shared/stream'
 import type { NormalizedBounds, RegionSelection, SourceInfo } from '../../shared/types'
 import {
   computeCoverCropAtFocus,
@@ -64,6 +65,14 @@ export class Recorder {
   private lastFrameAt = 0
   private recorder: MediaRecorder | null = null
   private canvasStream: MediaStream | null = null
+  private pendingStreamBytes = 0
+  private streamAudioContext: AudioContext | null = null
+  private backupRecorder: MediaRecorder | null = null
+  private backupSessionId: string | null = null
+  private backupQueue: Promise<void> = Promise.resolve()
+  private backupError: Error | null = null
+  private combinedStream: MediaStream | null = null
+  private streaming = false
   private sessionId: string | null = null
   private chunkQueue: Promise<void> = Promise.resolve()
   private cropRect: CropRect | null = null
@@ -246,7 +255,7 @@ export class Recorder {
     this.webcamVideo = await attachToVideoElement(this.webcamStream)
   }
 
-  async startRecording(): Promise<void> {
+  async startRecording(destination?: StreamDestination, recordLocal = false): Promise<void> {
     if (!this.previewOpen || !this.canvas) {
       await this.openPreview()
     }
@@ -293,33 +302,112 @@ export class Recorder {
       ...(this.micStream?.getAudioTracks() ?? []),
       ...(this.screenStream?.getAudioTracks() ?? [])
     ]
-    const combined = new MediaStream([...this.canvasStream.getVideoTracks(), ...audioTracks])
+    let outputAudio = audioTracks
+    if (destination && audioTracks.length > 1) {
+      this.streamAudioContext = new AudioContext()
+      const mixed = this.streamAudioContext.createMediaStreamDestination()
+      for (const track of audioTracks) {
+        this.streamAudioContext.createMediaStreamSource(new MediaStream([track])).connect(mixed)
+      }
+      await this.streamAudioContext.resume()
+      outputAudio = mixed.stream.getAudioTracks()
+    }
+    const combined = new MediaStream([...this.canvasStream.getVideoTracks(), ...outputAudio])
 
-    this.sessionId = await window.api.beginRecordingSession()
+    this.streaming = !!destination
+    this.sessionId = destination ? await window.api.beginStream(destination) : await window.api.beginRecordingSession()
+    this.combinedStream = combined
+    if (destination && recordLocal) {
+      try {
+        this.backupSessionId = await window.api.beginRecordingSession()
+        this.backupQueue = Promise.resolve()
+        this.backupError = null
+        this.backupRecorder = createMediaRecorder(combined, this.quality, this.format)
+        const backupId = this.backupSessionId
+        this.backupRecorder.ondataavailable = (event): void => {
+          if (!event.data.size || this.backupError) return
+          this.backupQueue = this.backupQueue.then(async () => {
+            if (!this.backupError) await window.api.appendRecordingChunk(backupId, await event.data.arrayBuffer())
+          }).catch((error: unknown) => {
+            this.backupError = error as Error
+          })
+        }
+        this.backupRecorder.onerror = (): void => { this.backupError = new Error('Local recording failed.') }
+        this.backupRecorder.start(1000)
+      } catch (error) {
+        if (this.backupSessionId) await window.api.abortRecordingSession(this.backupSessionId).catch(() => undefined)
+        this.backupSessionId = null
+        await window.api.finishStream(this.sessionId).catch(() => undefined)
+        this.sessionId = null
+        throw error
+      }
+    }
+    this.startMediaRecorder(combined)
+    this.recording = true
+    this.drawSuspended = false
+    if (this.rafHandle === null) this.runDrawLoop()
+  }
+
+  private startMediaRecorder(combined: MediaStream): void {
+    this.pendingStreamBytes = 0
     this.chunkQueue = Promise.resolve()
     this.recorder = createMediaRecorder(combined, this.quality, this.format)
     this.recorder.ondataavailable = (event): void => {
       if (event.data.size === 0 || !this.sessionId) return
       const sessionId = this.sessionId
       const blob = event.data
+      if (this.streaming && this.pendingStreamBytes + blob.size > 16 * 1024 * 1024) {
+        this.callbacks.onError('Live stream upload is too slow. Streaming stopped.')
+        return
+      }
+      this.pendingStreamBytes += blob.size
       this.chunkQueue = this.chunkQueue
         .then(async () => {
           const buffer = await blob.arrayBuffer()
-          await window.api.appendRecordingChunk(sessionId, buffer)
+          if (this.streaming) await window.api.appendStream(sessionId, buffer)
+          else await window.api.appendRecordingChunk(sessionId, buffer)
         })
         .catch((error: unknown) => {
           this.callbacks.onError(
-            `Failed to write recording chunk: ${(error as Error).message}`
+            `Failed to send media chunk: ${(error as Error).message}`
           )
         })
+        .finally(() => { this.pendingStreamBytes -= blob.size })
     }
     this.recorder.onerror = (): void => this.callbacks.onError('Recording failed unexpectedly.')
     this.recorder.start(1000)
-    this.recording = true
-    this.drawSuspended = false
-    if (this.rafHandle === null) {
-      this.runDrawLoop()
+  }
+
+  async restartStream(destination: StreamDestination): Promise<void> {
+    if (!this.streaming || !this.combinedStream) throw new Error('No live capture to reconnect.')
+    if (this.recorder && this.recorder.state !== 'inactive') {
+      const stopped = new Promise<void>(resolve => { this.recorder!.onstop = () => resolve() })
+      this.recorder.stop()
+      await stopped
     }
+    await this.chunkQueue
+    if (this.sessionId) await window.api.finishStream(this.sessionId)
+    this.sessionId = await window.api.beginStream(destination)
+    this.startMediaRecorder(this.combinedStream)
+  }
+
+  private async finishBackup(): Promise<string> {
+    const backup = this.backupRecorder
+    const id = this.backupSessionId
+    if (!backup || !id) return ''
+    if (backup.state !== 'inactive') {
+      const stopped = new Promise<void>(resolve => { backup.onstop = () => resolve() })
+      backup.stop()
+      await stopped
+    }
+    await this.backupQueue
+    this.backupRecorder = null
+    this.backupSessionId = null
+    if (this.backupError) {
+      // Keep the temporary recording for recovery instead of deleting it.
+      throw new Error(`Local backup could not be completed: ${this.backupError.message}`)
+    }
+    return window.api.finishRecordingSession(id)
   }
 
   pause(): void {
@@ -351,6 +439,9 @@ export class Recorder {
       await stopped
     }
     await this.chunkQueue
+    let backupPath = ''
+    let backupFailure: unknown
+    try { backupPath = await this.finishBackup() } catch (error) { backupFailure = error }
 
     this.recording = false
     this.recorder = null
@@ -359,14 +450,30 @@ export class Recorder {
     this.canvasStream = null
     this.micStream?.getTracks().forEach((track) => track.stop())
     this.micStream = null
+    for (const track of this.screenStream?.getAudioTracks() ?? []) {
+      track.stop()
+      this.screenStream?.removeTrack(track)
+    }
 
+    await this.streamAudioContext?.close()
+    this.streamAudioContext = null
     this.applyOutputSize('preview')
     this.syncVisibilityCompositor()
 
+    const wasStreaming = this.streaming
     try {
+      if (this.streaming) {
+        await window.api.finishStream(sessionId)
+        this.streaming = false
+        this.combinedStream = null
+        if (backupFailure) throw backupFailure
+        return backupPath
+      }
       return await window.api.finishRecordingSession(sessionId)
     } catch (error) {
-      await window.api.abortRecordingSession(sessionId).catch(() => undefined)
+      if (wasStreaming) await window.api.finishStream(sessionId).catch(() => undefined)
+      else await window.api.abortRecordingSession(sessionId).catch(() => undefined)
+      this.streaming = false
       throw error
     }
   }
@@ -514,12 +621,22 @@ export class Recorder {
       this.recorder = null
     }
 
+    if (this.backupRecorder) {
+      await this.finishBackup().catch((error: unknown) => {
+        this.callbacks.onError((error as Error).message)
+      })
+    }
+    this.combinedStream = null
     if (this.sessionId) {
       const id = this.sessionId
       this.sessionId = null
-      await window.api.abortRecordingSession(id).catch(() => undefined)
+      if (this.streaming) await window.api.finishStream(id).catch(() => undefined)
+      else await window.api.abortRecordingSession(id).catch(() => undefined)
+      this.streaming = false
     }
 
+    await this.streamAudioContext?.close()
+    this.streamAudioContext = null
     this.canvasStream?.getTracks().forEach((track) => track.stop())
     this.canvasStream = null
 

@@ -66,6 +66,11 @@ export interface CursorPoint {
 }
 
 export const IPC = {
+  beginStream: 'stream:begin',
+  appendStream: 'stream:append',
+  finishStream: 'stream:finish',
+  streamStatus: 'stream:status',
+  streamFailed: 'stream:failed',
   listSources: 'sources:list',
   chooseRecording: 'playback:choose',
   getRecordingPlayback: 'playback:get',

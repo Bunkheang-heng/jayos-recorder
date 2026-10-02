@@ -1,3 +1,4 @@
+import type { StreamDestination, StreamStatus } from '../shared/stream'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
 import type {
@@ -12,6 +13,15 @@ import type {
 } from '../shared/types'
 
 const api = {
+  beginStream: (destination: StreamDestination): Promise<string> => ipcRenderer.invoke(IPC.beginStream, destination),
+  appendStream: (id: string, buffer: ArrayBuffer): Promise<void> => ipcRenderer.invoke(IPC.appendStream, id, buffer),
+  finishStream: (id: string): Promise<void> => ipcRenderer.invoke(IPC.finishStream, id),
+  onStreamStatus: (callback: (status: StreamStatus) => void): void => {
+    ipcRenderer.on(IPC.streamStatus, (_event, status: StreamStatus) => callback(status))
+  },
+  onStreamFailed: (callback: () => void): void => {
+    ipcRenderer.on(IPC.streamFailed, () => callback())
+  },
   chooseRecording: (): Promise<PlaybackRecording | null> => ipcRenderer.invoke(IPC.chooseRecording),
   getRecordingPlayback: (filePath: string): Promise<PlaybackRecording> =>
     ipcRenderer.invoke(IPC.getRecordingPlayback, filePath),
